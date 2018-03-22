@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.2.0
+Version: 2.3.0
 Author: Matthew Sigley
 License: GPL2
 */
@@ -22,9 +22,6 @@ class WPSimpleSecurity {
 			$this->login_token_value = SIMPLE_SECURITY_LOGIN_TOKEN_VALUE;
 			$this->login_use_tarpit = !empty( constant('SIMPLE_SECURITY_LOGIN_USE_TARPIT') );
 
-			//Prevent brute force attempts on wp-login.php
-			$this->intercept_login_request();
-
 			//Append login token to lostpassword_url
 			add_filter('login_url', array($this, 'add_login_token_to_url'));
 			add_filter('lostpassword_url', array($this, 'add_login_token_to_url'));
@@ -35,8 +32,17 @@ class WPSimpleSecurity {
 			//Add nonce checking to wp-login.php forms
 			add_action('login_form', array($this, 'add_login_form_nonce'));
 			add_action('register_form', array($this, 'add_login_form_nonce'));
-			add_action('login_form_login', array($this, 'verify_login_form_nonce'));
-			add_action('login_form_register', array($this, 'verify_login_form_nonce'));
+			if( 'POST' == $_SERVER['REQUEST_METHOD'] ) {
+				//Verify nonce and http referer
+				add_action('login_form_login', array($this, 'verify_login_form_post'));
+				add_action('login_form_register', array($this, 'verify_login_form_post'));
+				//Removes detailed login error information for security and enforces login token
+				add_filter('authenticate', array($this, 'hide_login_errors'), 10, 3);
+				add_action('wp_login_failed', array($this, 'hide_login_errors'));
+			} else {
+				//Prevent brute force attempts on wp-login.php
+				$this->intercept_login_request();
+			}
 		}
 
 		//General protections
@@ -47,8 +53,6 @@ class WPSimpleSecurity {
 
 		//Removes the WordPress version from your header for security
 		add_filter('the_generator', array($this, 'wb_remove_version'));
-		//Removes detailed login error information for security
-		add_filter('login_errors',create_function('$a', "return null;"));
 		//Completely Disable Trackbacks
 		add_filter('pings_open', array($this, 'disable_all_trackbacks'), 10, 2);
 		//Removes Trackbacks from the comment count
@@ -161,14 +165,13 @@ class WPSimpleSecurity {
 		return 'Oops, so sorry! Action denied. If you feel you received this message by mistake, please contact us.';
 	}
 
-
 	/**
-	 * Login token functions
+	 * Login protection functions
 	 */
 	function intercept_login_request() {
-		$script_name = strtolower( $_SERVER['PHP_SELF'] );
+		$script_name = strtolower( $_SERVER['SCRIPT_NAME'] );
 
-		if( !empty($_POST) || '/wp-login.php' !== $script_name )
+		if( 'POST' == $_SERVER['REQUEST_METHOD'] || '/wp-login.php' !== $script_name )
 			return;
 		
 		if( $_REQUEST['action'] == 'logout' || $_REQUEST['action'] == 'rp' ) {
@@ -194,25 +197,24 @@ class WPSimpleSecurity {
 		return $logout_url;
 	}
 
-	/**
-	 * Login nonce functions
-	 */
+	function hide_login_errors( $null=null, $username='', $password='' ) {
+		if( empty($username) || empty($password) )
+			wp_redirect( wp_login_url() );
+	}
+
 	function add_login_form_nonce() {
 		wp_nonce_field( 'simple_security_wp_login', 'simple_security_wp_login' );
 	}
 
-	function verify_login_form_nonce() {
-		if( empty($_POST) )
+	function verify_login_form_post() {
+		if( $_SERVER['HTTP_REFERER'] === wp_login_url() 
+			&& wp_verify_nonce( $_REQUEST['simple_security_wp_login'], 'simple_security_wp_login' ) )
 			return;
-		
-		if( $this->login_use_tarpit ) {
-			if( wp_verify_nonce( $_REQUEST['simple_security_wp_login'], 'simple_security_wp_login' ) )
-				return;
-			else
-				include 'includes/la_brea.php';
-		}
 
-		check_admin_referer( 'simple_security_wp_login', 'simple_security_wp_login' );
+		if( $this->login_use_tarpit )
+			include 'includes/la_brea.php';
+
+		wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
 	}
 }
 $WPSimpleSecurity = WPSimpleSecurity::object();
