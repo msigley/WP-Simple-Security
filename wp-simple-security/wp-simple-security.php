@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.4.0
+Version: 2.4.1
 Author: Matthew Sigley
 License: GPL2
 */
@@ -16,12 +16,15 @@ class WPSimpleSecurity {
 	private $login_token_value = null;
 	
 	private function __construct() {
-		$this->use_tarpit = !empty( constant( 'SIMPLE_SECURITY_USE_TARPIT' ) );
+		if( defined( 'SIMPLE_SECURITY_LOGIN_TOKEN_NAME' ) )
+			$this->use_tarpit = !empty( SIMPLE_SECURITY_USE_TARPIT );
+		
 		//Completely Disable XMLRPC API
 		$this->intercept_xmlrpc_request();
 
 		//Login form protections
-		if( !empty( constant( 'SIMPLE_SECURITY_LOGIN_TOKEN_NAME' ) ) && !empty( constant( 'SIMPLE_SECURITY_LOGIN_TOKEN_VALUE' ) ) ) {
+		if( defined( 'SIMPLE_SECURITY_LOGIN_TOKEN_NAME' ) && defined( 'SIMPLE_SECURITY_LOGIN_TOKEN_VALUE' ) 
+			&& !empty( SIMPLE_SECURITY_LOGIN_TOKEN_NAME ) && !empty( SIMPLE_SECURITY_LOGIN_TOKEN_VALUE ) ) {
 			$this->login_token_name = SIMPLE_SECURITY_LOGIN_TOKEN_NAME;
 			$this->login_token_value = SIMPLE_SECURITY_LOGIN_TOKEN_VALUE;
 
@@ -49,7 +52,7 @@ class WPSimpleSecurity {
 		}
 
 		//General protections
-		if( !empty( constant( 'CSSJSVERSION' ) ) )
+		if( defined('CSSJSVERSION') && !empty( CSSJSVERSION ) )
 			$this->css_js_version = CSSJSVERSION;
 		else
 			$this->css_js_version = date( 'Ymd', current_time( 'timestamp' ) );
@@ -70,6 +73,8 @@ class WPSimpleSecurity {
 		add_filter( 'gettext', array( $this, 'access_denied_message' ) );
 
 		if( !is_admin() ) {
+			//Remove author query vars to prevent DB enumeration
+			add_filter('query_vars', array( $this, 'remove_insecure_query_vars' ) );
 			//Remove Bad Comment Author URLS
 			add_filter( 'get_comment_author_url', array( $this, 'comment_author_url' ) );
 		}
@@ -166,6 +171,10 @@ class WPSimpleSecurity {
 		if( 'Cheatin&#8217; uh?' != $translated_text )
 			return $translated_text;
 		return 'Oops, so sorry! Action denied. If you feel you received this message by mistake, please contact us.';
+	}
+
+	public function remove_insecure_query_vars( $allowed_query_vars ) {
+		return array_diff( $allowed_query_vars, array( 'author' ) );
 	}
 
 	/**
