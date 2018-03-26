@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.3.0
+Version: 2.4.0
 Author: Matthew Sigley
 License: GPL2
 */
@@ -11,34 +11,37 @@ License: GPL2
 class WPSimpleSecurity {
 	private static $object = null;
 	private $css_js_version = '1';
+	private $use_tarpit = false;
 	private $login_token_name = null;
 	private $login_token_value = null;
-	private $login_use_tarpit = false;
 	
-	private function __construct () {
+	private function __construct() {
+		$this->use_tarpit = !empty( constant( 'SIMPLE_SECURITY_USE_TARPIT' ) );
+		//Completely Disable XMLRPC API
+		$this->intercept_xmlrpc_request();
+
 		//Login form protections
-		if( !empty( constant('SIMPLE_SECURITY_LOGIN_TOKEN_NAME') ) && !empty( constant('SIMPLE_SECURITY_LOGIN_TOKEN_VALUE') ) ) {
+		if( !empty( constant( 'SIMPLE_SECURITY_LOGIN_TOKEN_NAME' ) ) && !empty( constant( 'SIMPLE_SECURITY_LOGIN_TOKEN_VALUE' ) ) ) {
 			$this->login_token_name = SIMPLE_SECURITY_LOGIN_TOKEN_NAME;
 			$this->login_token_value = SIMPLE_SECURITY_LOGIN_TOKEN_VALUE;
-			$this->login_use_tarpit = !empty( constant('SIMPLE_SECURITY_LOGIN_USE_TARPIT') );
 
 			//Append login token to lostpassword_url
-			add_filter('login_url', array($this, 'add_login_token_to_url'));
-			add_filter('lostpassword_url', array($this, 'add_login_token_to_url'));
+			add_filter( 'login_url', array( $this, 'add_login_token_to_url' ) );
+			add_filter( 'lostpassword_url', array( $this, 'add_login_token_to_url' ) );
 
 			//Force logout redirects to home page
-			add_filter('logout_url', array($this, 'force_redirect_to_home'));
+			add_filter( 'logout_url', array( $this, 'force_redirect_to_home' ) );
 		
 			//Add nonce checking to wp-login.php forms
-			add_action('login_form', array($this, 'add_login_form_nonce'));
-			add_action('register_form', array($this, 'add_login_form_nonce'));
+			add_action( 'login_form', array( $this, 'add_login_form_nonce' ) );
+			add_action( 'register_form', array( $this, 'add_login_form_nonce' ) );
 			if( 'POST' == $_SERVER['REQUEST_METHOD'] ) {
 				//Verify nonce and http referer
-				add_action('login_form_login', array($this, 'verify_login_form_post'));
-				add_action('login_form_register', array($this, 'verify_login_form_post'));
+				add_action( 'login_form_login', array( $this, 'verify_login_form_post' ) );
+				add_action( 'login_form_register', array( $this, 'verify_login_form_post' ) );
 				//Removes detailed login error information for security and enforces login token
-				add_filter('authenticate', array($this, 'hide_login_errors'), 10, 3);
-				add_action('wp_login_failed', array($this, 'hide_login_errors'));
+				add_filter( 'authenticate', array( $this, 'hide_login_errors' ), 10, 3 );
+				add_action( 'wp_login_failed', array( $this, 'hide_login_errors' ) );
 			} else {
 				//Prevent brute force attempts on wp-login.php
 				$this->intercept_login_request();
@@ -46,29 +49,29 @@ class WPSimpleSecurity {
 		}
 
 		//General protections
-		if( !empty( constant('CSSJSVERSION') ) )
+		if( !empty( constant( 'CSSJSVERSION' ) ) )
 			$this->css_js_version = CSSJSVERSION;
 		else
-			$this->css_js_version = date('Ymd', current_time('timestamp'));
+			$this->css_js_version = date( 'Ymd', current_time( 'timestamp' ) );
 
 		//Removes the WordPress version from your header for security
-		add_filter('the_generator', array($this, 'wb_remove_version'));
+		add_filter( 'the_generator', array( $this, 'wb_remove_version' ) );
 		//Completely Disable Trackbacks
-		add_filter('pings_open', array($this, 'disable_all_trackbacks'), 10, 2);
+		add_filter( 'pings_open', array( $this, 'disable_all_trackbacks' ), 10, 2 );
 		//Removes Trackbacks from the comment count
-		add_filter('get_comments_number', array($this, 'comment_count'), 0);
+		add_filter( 'get_comments_number', array( $this, 'comment_count' ), 0 );
 		//Limits the length of all fields from a comment form
-		add_filter('preprocess_comment', array($this, 'limit_comment_field_length'));
+		add_filter( 'preprocess_comment', array( $this, 'limit_comment_field_length' ) );
 		//Removes insecure information on dependancy includes
-		add_action('wp_print_scripts', array($this, 'sanitize_scripts'), 9999);
-		add_action('wp_print_styles', array($this, 'sanitize_styles'), 9999);
+		add_action( 'wp_print_scripts', array( $this, 'sanitize_scripts' ), 9999 );
+		add_action( 'wp_print_styles', array( $this, 'sanitize_styles' ), 9999 );
 		//Replace Cheatin', uh? messages with something more professional
 		//Uses the wordpress translation system
-		add_filter('gettext', array($this, 'access_denied_message') );
+		add_filter( 'gettext', array( $this, 'access_denied_message' ) );
 
 		if( !is_admin() ) {
 			//Remove Bad Comment Author URLS
-			add_filter('get_comment_author_url', array($this, 'comment_author_url') );
+			add_filter( 'get_comment_author_url', array( $this, 'comment_author_url' ) );
 		}
 	}
 	
@@ -109,8 +112,8 @@ class WPSimpleSecurity {
 	public function comment_count( $count ) {
 		if ( ! is_admin() ) {
 			global $id;
-			$comments_by_type = &separate_comments(get_comments('status=approve&post_id=' . $id));
-			return count($comments_by_type['comment']);
+			$comments_by_type = &separate_comments( get_comments( 'status=approve&post_id=' . $id ) );
+			return count( $comments_by_type['comment'] );
 		} else {
 			return $count;
 		}
@@ -152,9 +155,9 @@ class WPSimpleSecurity {
 			
 		if( $bad_length ) {
 			//Send comment flood message since its in core and will confuse and slow down bots that recognize it
-			if ( defined('DOING_AJAX') )
-				die( __('You are posting comments too quickly.  Slow down.') );
-			wp_die( __('You are posting comments too quickly.  Slow down.') );
+			if ( defined( 'DOING_AJAX' ) )
+				die( __( 'You are posting comments too quickly.  Slow down.' ) );
+			wp_die( __( 'You are posting comments too quickly.  Slow down.' ) );
 		}
 		return $commentdata;
 	}
@@ -163,6 +166,19 @@ class WPSimpleSecurity {
 		if( 'Cheatin&#8217; uh?' != $translated_text )
 			return $translated_text;
 		return 'Oops, so sorry! Action denied. If you feel you received this message by mistake, please contact us.';
+	}
+
+	/**
+	 * WP API protection functions
+	 */
+	function intercept_xmlrpc_request() {
+		$script_name = strtolower( $_SERVER['SCRIPT_NAME'] );
+
+		if( '/xmlrpc.php' === $script_name ) {
+			if( $this->use_tarpit )
+				include 'includes/la_brea.php';
+			wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
+		}
 	}
 
 	/**
@@ -179,7 +195,7 @@ class WPSimpleSecurity {
 		}
 
 		if( empty( $_REQUEST[$this->login_token_name] ) || $_REQUEST[$this->login_token_name] !== $this->login_token_value ) {
-			if( $this->login_use_tarpit )
+			if( $this->use_tarpit )
 				include 'includes/la_brea.php';
 			wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
 		}
@@ -188,18 +204,22 @@ class WPSimpleSecurity {
 	function add_login_token_to_url( $url ) {
 		if( is_admin() ) //Don't add security token to auth_redirects
 			return $url;
-		return add_query_arg($this->login_token_name, $this->login_token_value, $url);
+		return add_query_arg( $this->login_token_name, $this->login_token_value, $url );
 	}
 
-	function force_redirect_to_home($logout_url) {
-		$logout_url = remove_query_arg('redirect_to', $logout_url);
-		$logout_url = add_query_arg('redirect_to', urlencode(get_bloginfo('url')), $logout_url);
+	function force_redirect_to_home( $logout_url ) {
+		$logout_url = remove_query_arg( 'redirect_to', $logout_url );
+		$logout_url = add_query_arg( 'redirect_to', urlencode( get_bloginfo( 'url' ) ), $logout_url );
 		return $logout_url;
 	}
 
 	function hide_login_errors( $null=null, $username='', $password='' ) {
-		if( empty($username) || empty($password) )
+		if( empty( $username ) || empty( $password ) ) {
+			$login_url = wp_login_url();
+			if( !empty( $_REQUEST['redirect_to'] ) )
+				$login_url = add_query_arg( 'redirect_to', urlencode( $login_url ), $login_url );
 			wp_redirect( wp_login_url() );
+		}
 	}
 
 	function add_login_form_nonce() {
@@ -207,11 +227,11 @@ class WPSimpleSecurity {
 	}
 
 	function verify_login_form_post() {
-		if( $_SERVER['HTTP_REFERER'] === wp_login_url() 
+		if( remove_query_arg( 'redirect_to', $_SERVER['HTTP_REFERER'] ) === wp_login_url() 
 			&& wp_verify_nonce( $_REQUEST['simple_security_wp_login'], 'simple_security_wp_login' ) )
 			return;
 
-		if( $this->login_use_tarpit )
+		if( $this->use_tarpit )
 			include 'includes/la_brea.php';
 
 		wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
