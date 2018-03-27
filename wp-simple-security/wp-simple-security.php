@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.4.1
+Version: 2.4.2
 Author: Matthew Sigley
 License: GPL2
 */
@@ -14,8 +14,14 @@ class WPSimpleSecurity {
 	private $use_tarpit = false;
 	private $login_token_name = null;
 	private $login_token_value = null;
+	private $site_root = '';
+	private $script_name = '';
 	
 	private function __construct() {
+		$this->site_root = strtolower( site_url() );
+		$this->site_root = substr( $this->site_root, strpos( $this->site_root, $_SERVER['SERVER_NAME'] ) + strlen( $_SERVER['SERVER_NAME'] ) );
+		$this->script_name = strtolower( $_SERVER['SCRIPT_NAME'] );
+
 		if( defined( 'SIMPLE_SECURITY_LOGIN_TOKEN_NAME' ) )
 			$this->use_tarpit = !empty( SIMPLE_SECURITY_USE_TARPIT );
 		
@@ -183,9 +189,11 @@ class WPSimpleSecurity {
 	function intercept_xmlrpc_request() {
 		$script_name = strtolower( $_SERVER['SCRIPT_NAME'] );
 
-		if( '/xmlrpc.php' === $script_name ) {
+		if( $this->site_root . '/xmlrpc.php' === $this->script_name ) {
 			if( $this->use_tarpit )
 				include 'includes/la_brea.php';
+			
+			add_filter( 'wp_die_xmlrpc_handler', function( $die_handler ) { return '_default_wp_die_handler'; } );
 			wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
 		}
 	}
@@ -194,9 +202,7 @@ class WPSimpleSecurity {
 	 * Login protection functions
 	 */
 	function intercept_login_request() {
-		$script_name = strtolower( $_SERVER['SCRIPT_NAME'] );
-
-		if( 'POST' == $_SERVER['REQUEST_METHOD'] || '/wp-login.php' !== $script_name )
+		if( 'POST' == $_SERVER['REQUEST_METHOD'] || $this->site_root . '/wp-login.php' !== $this->script_name )
 			return;
 		
 		if( $_REQUEST['action'] == 'logout' || $_REQUEST['action'] == 'rp' ) {
