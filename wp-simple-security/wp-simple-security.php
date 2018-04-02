@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.4.2
+Version: 2.4.4
 Author: Matthew Sigley
 License: GPL2
 */
@@ -74,11 +74,12 @@ class WPSimpleSecurity {
 		//Removes insecure information on dependancy includes
 		add_action( 'wp_print_scripts', array( $this, 'sanitize_scripts' ), 9999 );
 		add_action( 'wp_print_styles', array( $this, 'sanitize_styles' ), 9999 );
-		//Replace Cheatin', uh? messages with something more professional
-		//Uses the wordpress translation system
-		add_filter( 'gettext', array( $this, 'access_denied_message' ) );
 
 		if( !is_admin() ) {
+			//Replace Cheatin', uh? messages with something more professional
+			//Uses the wordpress translation system
+			add_filter( 'gettext', array( $this, 'access_denied_message' ) );
+			
 			//Remove author query vars to prevent DB enumeration
 			add_filter('query_vars', array( $this, 'remove_insecure_query_vars' ) );
 			//Remove Bad Comment Author URLS
