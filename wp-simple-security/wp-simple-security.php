@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.4.4
+Version: 2.5.0
 Author: Matthew Sigley
 License: GPL2
 */
@@ -239,18 +239,52 @@ class WPSimpleSecurity {
 	}
 
 	function add_login_form_nonce() {
-		wp_nonce_field( 'simple_security_wp_login', 'simple_security_wp_login' );
+		$this->nonce_field( 'simple_security_wp_login', 'simple_security_wp_login' );
 	}
 
 	function verify_login_form_post() {
 		if( remove_query_arg( 'redirect_to', $_SERVER['HTTP_REFERER'] ) === wp_login_url() 
-			&& wp_verify_nonce( $_REQUEST['simple_security_wp_login'], 'simple_security_wp_login' ) )
+			&& $this->verify_nonce( $_REQUEST['simple_security_wp_login'], 'simple_security_wp_login' ) )
 			return;
 
 		if( $this->use_tarpit )
 			include 'includes/la_brea.php';
 
 		wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
+	}
+
+	/**
+	 * Nonce functions
+	 */
+	function nonce_field( $action = -1, $name = "_nonce", $echo = true ) {
+		$name = esc_attr( $name );
+		$nonce_field = '<input type="hidden" id="' . $name . '" name="' . $name . '" value="' . $this->create_nonce( $action ) . '" />';
+
+		if ( $echo )
+			echo $nonce_field;
+
+		return $nonce_field;
+	}
+
+	function verify_nonce( $nonce, $action = -1 ) {
+		$nonce = (string) $nonce;
+		
+		$i = wp_nonce_tick();
+
+		// Nonce generated 0-12 hours ago
+		if ( substr(wp_hash($i . '|' . $action, 'nonce'), -12, 10) == $nonce )
+			return 1;
+		// Nonce generated 12-24 hours ago
+		if ( substr(wp_hash(($i - 1) . '|' . $action, 'nonce'), -12, 10) == $nonce )
+			return 2;
+		// Invalid nonce
+		return false;
+	}
+
+	function create_nonce( $action = -1 ) {
+		$i = wp_nonce_tick();
+
+		return substr(wp_hash($i . '|' . $action, 'nonce'), -12, 10);
 	}
 }
 $WPSimpleSecurity = WPSimpleSecurity::object();
