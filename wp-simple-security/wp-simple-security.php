@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.5.1
+Version: 2.6.1
 Author: Matthew Sigley
 License: GPL2
 */
@@ -74,6 +74,8 @@ class WPSimpleSecurity {
 		//Removes insecure information on dependancy includes
 		add_action( 'wp_print_scripts', array( $this, 'sanitize_scripts' ), 9999 );
 		add_action( 'wp_print_styles', array( $this, 'sanitize_styles' ), 9999 );
+		//Prevents arbitrary file deletion attack through post thumbnail meta
+		add_filter( 'wp_update_attachment_metadata', array( $this, 'sanitize_thumbnail_paths' ) );
 
 		if( !is_admin() ) {
 			//Replace Cheatin', uh? messages with something more professional
@@ -184,6 +186,11 @@ class WPSimpleSecurity {
 		return array_diff( $allowed_query_vars, array( 'author' ) );
 	}
 
+	public function sanitize_thumbnail_paths( $thumbnail_data ) {
+		if( isset( $thumbnail_data['thumb'] ) )
+			$thumbnail_data['thumb'] = basename( $thumbnail_data['thumb'] );
+	}
+
 	/**
 	 * WP API protection functions
 	 */
@@ -230,6 +237,9 @@ class WPSimpleSecurity {
 	}
 
 	function hide_login_errors( $null=null, $username='', $password='' ) {
+		if( remove_query_arg( 'redirect_to', $_SERVER['HTTP_REFERER'] ) !== wp_login_url() )
+			return; //Do nothing for plugin login handlers
+		
 		if( empty( $username ) || empty( $password ) ) {
 			$login_url = wp_login_url();
 			if( !empty( $_REQUEST['redirect_to'] ) )
