@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.6.1
+Version: 2.6.2
 Author: Matthew Sigley
 License: GPL2
 */
@@ -189,6 +189,8 @@ class WPSimpleSecurity {
 	public function sanitize_thumbnail_paths( $thumbnail_data ) {
 		if( isset( $thumbnail_data['thumb'] ) )
 			$thumbnail_data['thumb'] = basename( $thumbnail_data['thumb'] );
+		
+		return $thumbnail_data;
 	}
 
 	/**
