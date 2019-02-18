@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.6.2
+Version: 2.8.0
 Author: Matthew Sigley
 License: GPL2
 */
@@ -61,7 +61,7 @@ class WPSimpleSecurity {
 		if( defined('CSSJSVERSION') && !empty( CSSJSVERSION ) )
 			$this->css_js_version = CSSJSVERSION;
 		else
-			$this->css_js_version = date( 'Ymd', current_time( 'timestamp' ) );
+			$this->css_js_version = date( 'Y-W', current_time('timestamp') );
 
 		//Removes the WordPress version from your header for security
 		add_filter( 'the_generator', array( $this, 'wb_remove_version' ) );
@@ -79,8 +79,8 @@ class WPSimpleSecurity {
 
 		if( !is_admin() ) {
 			//Replace Cheatin', uh? messages with something more professional
-			//Uses the wordpress translation system
-			add_filter( 'gettext', array( $this, 'access_denied_message' ) );
+			//Sets a new wp_die_handler
+			add_filter( 'wp_die_handler', array( $this, 'wp_die_handler' ) );
 			
 			//Remove author query vars to prevent DB enumeration
 			add_filter('query_vars', array( $this, 'remove_insecure_query_vars' ) );
@@ -100,10 +100,16 @@ class WPSimpleSecurity {
 	 * General protection functions
 	 */
 	public function sanitize_scripts() {
-		global $wp_scripts;
+		global $wp_scripts, $ShoppScripts;
 		
 		foreach( $wp_scripts->queue as $enqueued_script ) {
 			$wp_scripts->registered[$enqueued_script]->ver = $this->css_js_version;
+		}
+
+		if( !empty( $ShoppScripts->registered ) ) {
+			foreach( $ShoppScripts->queue as $enqueued_script ) {
+				$ShoppScripts->registered[$enqueued_script]->ver = $this->css_js_version;
+			}
 		}
 	}
 	
@@ -176,10 +182,14 @@ class WPSimpleSecurity {
 		return $commentdata;
 	}
 	
-	function access_denied_message( $translated_text ) {
-		if( 'Cheatin&#8217; uh?' != $translated_text )
-			return $translated_text;
-		return 'Oops, so sorry! Action denied. If you feel you received this message by mistake, please contact us.';
+	function wp_die_handler( $handler ) {
+		return array( $this, 'action_denied_message' );
+	}
+
+	function action_denied_message( $message, $title = '', $args = array() ) {
+		if( 'Cheatin&#8217; uh?' == $message )
+			$message = 'Oops, so sorry! Action denied. If you feel you received this message by mistake, please contact us.';
+		_default_wp_die_handler( $message, $title, $args = array() );
 	}
 
 	public function remove_insecure_query_vars( $allowed_query_vars ) {
