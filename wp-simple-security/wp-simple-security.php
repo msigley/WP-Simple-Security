@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 2.8.0
+Version: 2.8.1
 Author: Matthew Sigley
 License: GPL2
 */
@@ -27,6 +27,7 @@ class WPSimpleSecurity {
 		
 		//Completely Disable XMLRPC API
 		$this->intercept_xmlrpc_request();
+		remove_action( 'wp_head', 'rsd_link' );
 
 		//Login form protections
 		if( defined( 'SIMPLE_SECURITY_LOGIN_TOKEN_NAME' ) && defined( 'SIMPLE_SECURITY_LOGIN_TOKEN_VALUE' ) 
@@ -63,8 +64,10 @@ class WPSimpleSecurity {
 		else
 			$this->css_js_version = date( 'Y-W', current_time('timestamp') );
 
-		//Removes the WordPress version from your header for security
+		//Removes the WordPress version from the header for security
 		add_filter( 'the_generator', array( $this, 'wb_remove_version' ) );
+		//Removes the Windows Live Writer Manifest from the head
+		remove_action( 'wp_head', 'wlwmanifest_link' );
 		//Completely Disable Trackbacks
 		add_filter( 'pings_open', array( $this, 'disable_all_trackbacks' ), 10, 2 );
 		//Removes Trackbacks from the comment count
