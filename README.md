@@ -36,7 +36,7 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 * Blocks all requests to your site for one hour from IPs that have made 5 or more bad XMLRPC API or login form requests in the last 30 minutes.
 * Supports IPv4 and IPv6 addresses.
 * Blocked visitors will receive a message stating their IP has been blocked with a link to unblock their IP address.
-* Blocked visitors that attempt to manipulate the unblock system recieve a permenant hour block.
+* Blocked visitors that attempt to manipulate the unblock system recieve a permanent hour block.
 ### How to use the IP Blocker
 1. Add ```defined('SIMPLE_SECURITY_USE_IP_BLOCKER', true);``` into your wp-config.php file.
 2. Add ```defined('SIMPLE_SECURITY_BLOCK_INTERNAL_IPS', true);``` into your wp-config.php file if you wish to block internal and reserved IP ranges. The default is to not block these IP ranges.
