@@ -65,5 +65,6 @@ https://github.com/msigley/PHP-HTTP-Tarpit
     )
    )
   );``` into your wp-config.php file.
+
 IPv4 addresses, IPv6 addresses, and IPv4 CIDR blocks are supported.
   
