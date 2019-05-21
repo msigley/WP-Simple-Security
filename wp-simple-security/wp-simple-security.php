@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.1.0
+Version: 3.1.1
 Author: Matthew Sigley
 License: GPL2
 */
@@ -338,6 +338,9 @@ class WPSimpleSecurity {
 			$bad_length = true;
 			
 		if( $bad_length ) {
+			if( $this->use_ip_blocker )
+				$this->log_request();
+			
 			//Send comment flood message since its in core and will confuse and slow down bots that recognize it
 			if ( defined( 'DOING_AJAX' ) )
 				die( __( 'You are posting comments too quickly.  Slow down.' ) );
