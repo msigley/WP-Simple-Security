@@ -40,3 +40,30 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 ### How to use the IP Blocker
 1. Add ```defined('SIMPLE_SECURITY_USE_IP_BLOCKER', true);``` into your wp-config.php file.
 2. Add ```defined('SIMPLE_SECURITY_BLOCK_INTERNAL_IPS', true);``` into your wp-config.php file if you wish to block internal and reserved IP ranges. The default is to not block these IP ranges.
+
+## Whitelisted IPs
+* Prevents a list of IP addresses from being sent to the tarpit or from being blocked by the IP Blocker.
+* IPs on this list will still recieve access denied messages on bad requests.
+### How to whitelist IPs
+1. If you are using PHP 7 or above:
+  a. Add ```
+  define('SIMPLE_SECURITY_WHITELISTED_IPS', 
+   array(
+    '127.0.0.1',
+    '192.168.10.0/20',
+    '::1'
+   )
+  );``` into your wp-config.php file.
+2. If you are using PHP 5.6:
+  a. Add ```
+  define('SIMPLE_SECURITY_WHITELISTED_IPS', 
+   serialize(
+    array(
+     '127.0.0.1',
+     '192.168.10.0/20',
+     '::1'
+    )
+   )
+  );``` into your wp-config.php file.
+IPv4 addresses, IPv6 addresses, and IPv4 CIDR blocks are supported.
+  
