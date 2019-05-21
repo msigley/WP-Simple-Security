@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.0.0
+Version: 3.1.0
 Author: Matthew Sigley
 License: GPL2
 */
@@ -16,6 +16,7 @@ class WPSimpleSecurity {
 	private $block_internal_ips = false;
 	private $login_token_name = null;
 	private $login_token_value = null;
+	private $request_ip = null;
 	private $site_root = '';
 	private $script_name = '';
 	private $wpdb = null;
@@ -47,6 +48,86 @@ class WPSimpleSecurity {
 			&& !empty( SIMPLE_SECURITY_LOGIN_TOKEN_NAME ) && !empty( SIMPLE_SECURITY_LOGIN_TOKEN_VALUE ) ) {
 			$this->login_token_name = SIMPLE_SECURITY_LOGIN_TOKEN_NAME;
 			$this->login_token_value = SIMPLE_SECURITY_LOGIN_TOKEN_VALUE;
+		}
+
+		if( $this->use_ip_blocker ) {
+			$ip = $_SERVER['REMOTE_ADDR'];
+			if( $this->block_internal_ips )
+				$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP );
+			else
+				$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE );
+			$this->request_ip = inet_pton( $ip );
+			$this->use_ip_blocker = !empty( $this->request_ip );
+		}
+
+		if( $this->use_ip_blocker && defined( 'SIMPLE_SECURITY_WHITELISTED_IPS' ) && !empty( SIMPLE_SECURITY_WHITELISTED_IPS ) ) {
+			$whitelisted_ips_cache_key = SIMPLE_SECURITY_WHITELISTED_IPS;
+			if( is_array( $whitelisted_ips ) ) // Support serialized arrays for PHP 5.6
+				$whitelisted_ips_cache_key = serialize( $whitelisted_ips );
+
+			// Try to pull the whitelisted ips array from the cache to avoid building it on every request
+			$whitelisted_ips = wp_cache_get( $whitelisted_ips_cache_key, 'simple_security_whitelisted_ips' );
+			if( false === $whitelisted_ips ) {
+				// Build whitelisted ips array
+				$whitelisted_ips = SIMPLE_SECURITY_WHITELISTED_IPS;
+				if( !is_array( $whitelisted_ips ) )
+					$whitelisted_ips = unserialize( $whitelisted_ips ); 
+				foreach( $whitelisted_ips as &$whitelisted_ip ) {
+					$slash_pos = strrpos( $whitelisted_ip, '/' );
+					$netmask = false;
+					if( false !== $slash_pos ) {
+						$netmask = (int) substr( $whitelisted_ip, $slash_pos + 1 );
+						$whitelisted_ip = substr( $whitelisted_ip, 0, $slash_pos );
+					}
+
+					$ip = inet_pton( $whitelisted_ip );
+					$ip_len = strlen( $ip );
+
+					$whitelisted_ip = array(
+						'ip' => $ip,
+						'ip_len' => $ip_len
+					);
+
+					if( false !== $netmask ) {
+						// Convert subnet to binary string of $bits length
+						$subnet_binary = unpack( 'H*', $ip ); // Subnet in Hex
+						foreach( $subnet_binary as $i => $h ) $subnet_binary[$i] = base_convert($h, 16, 2); // Array of Binary
+						$subnet_binary = implode( '', $subnet_binary ); // Subnet in Binary
+						
+						$whitelisted_ip['subnet_binary'] = $subnet_binary;
+						$whitelisted_ip['netmask'] = $netmask;
+					}
+				}
+				wp_cache_set( $whitelisted_ips_cache_key, $whitelisted_ips, 'simple_security_whitelisted_ips', DAY_IN_SECONDS );
+			}
+
+			// Check if request ip is whitelisted
+			$request_ip_len = strlen( $this->request_ip );
+			$request_ip_binary = unpack( 'H*', $this->request_ip ); // Subnet in Hex
+			foreach( $request_ip_binary as $i => $h ) $request_ip_binary[$i] = base_convert($h, 16, 2); // Array of Binary
+			$request_ip_binary = implode( '', $request_ip_binary ); // Subnet in Binary, only network bits
+			$whitelisted = false;
+
+			foreach( $whitelisted_ips as $whitelisted_ip ) {
+				if( $request_ip_len != $whitelisted_ip['ip_len'] ) // Don't compare IPv4 to IPv6 addresses and vice versa
+					continue;
+
+				if( $this->request_ip == $whitelisted_ip['ip'] ) {
+					$whitelisted = true;
+					break;
+				}
+				
+				if( !empty( $whitelisted_ip['netmask'] ) && !empty( $whitelisted_ip['subnet_binary'] )
+					&& 0 === substr_compare( $request_ip_binary, $whitelisted_ip['subnet_binary'], 0, $whitelisted_ip['netmask'] ) ) {
+					$whitelisted = true;
+					break;
+				}
+			}
+
+			if( $whitelisted ) {
+				$this->use_tarpit = false;
+				$this->use_ip_blocker = false;
+			}
 		}
 
 		if( defined('CSSJSVERSION') && !empty( CSSJSVERSION ) )
@@ -413,14 +494,13 @@ class WPSimpleSecurity {
 		// Include wp_nonce functions since they aren't available yet
 		require( ABSPATH . WPINC . '/pluggable.php' );
 
-		$request_ip = $this->get_request_ip();
-		$nonce_action = 'simple_security_unblock_ip|' . $request_ip . '|' . $blocked_ip->created;
+		$nonce_action = 'simple_security_unblock_ip|' . $blocked_ip->ip . '|' . $blocked_ip->created;
 		$unblock_url = remove_query_arg( 'unblock_ip', $this->self_uri() );
 		
 		// Handle unblock IP requests
 		if( !empty( $_REQUEST['unblock_ip'] ) ) {
 			if( $this->verify_nonce( $_REQUEST['unblock_ip'], $nonce_action ) )
-				$this->unblock_ip( $request_ip );
+				$this->unblock_ip();
 			else
 				$this->block_ip( 'medium' ); // Failed attempt to unblock IP, raise risk level and renew block
 			
@@ -428,7 +508,7 @@ class WPSimpleSecurity {
 			die();
 		}
 		
-		$message = 'Your IP address (' . $request_ip . ') has been blocked from accessing this website due to suspicous activity.';
+		$message = 'Your IP address (' . $blocked_ip->ip . ') has been blocked from accessing this website due to suspicous activity.';
 
 		// Allow low risk IPs to unblock themselves
 		if( 'low' == $blocked_ip->risk_level ) {
@@ -452,51 +532,30 @@ class WPSimpleSecurity {
 	/**
 	 * IP logging functions
 	 */
-	private function get_request_ip() {
-		$ip = $_SERVER['REMOTE_ADDR'];
-		if( $this->block_internal_ips )
-			$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP );
-		else
-			$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE );
-		return $ip;
-	}
-
 	private function log_request() {
-		$ip = $this->get_request_ip();
-		if( empty( $ip ) )
-			return;
-
 		$now = current_time( 'mysql' );
-		$query = $this->wpdb->prepare( "INSERT INTO $this->admin_access_log_table (ip, accessed) VALUES (INET6_ATON(%s), %s)", $ip, $now );
+		$query = $this->wpdb->prepare( "INSERT INTO $this->admin_access_log_table (ip, accessed) VALUES (%s, %s)", $this->request_ip, $now );
 		$this->wpdb->query( $query );
 
-		$query = $this->wpdb->prepare( "SELECT COUNT(1) as num_access_attempts FROM $this->admin_access_log_table WHERE ip=INET6_ATON(%s) AND 30 >= TIMESTAMPDIFF( MINUTE, accessed, %s )", $ip, $now );
+		$query = $this->wpdb->prepare( "SELECT COUNT(1) as num_access_attempts FROM $this->admin_access_log_table WHERE ip=%s AND 30 >= TIMESTAMPDIFF( MINUTE, accessed, %s )", $this->request_ip, $now );
 		$num_access_attempts = $this->wpdb->get_var( $query );
 		if( $num_access_attempts >= 5 )
 			$this->block_ip();
 	}
 
 	private function block_ip( $risk_level = 'low' ) {
-		$ip = $this->get_request_ip();
-		if( empty( $ip ) )
-			return;
-
 		$now = current_time( 'mysql' );
-		$query = $this->wpdb->prepare( "REPLACE INTO $this->blocked_table (ip, risk_level, created) VALUES (INET6_ATON(%s), %s, %s)", $ip, $risk_level, $now );
+		$query = $this->wpdb->prepare( "REPLACE INTO $this->blocked_table (ip, risk_level, created) VALUES (%s, %s, %s)", $this->request_ip, $risk_level, $now );
 		$this->wpdb->query( $query );
 	}
 
-	private function unblock_ip( $ip ) {
-		$query = $this->wpdb->prepare( "DELETE QUICK FROM $this->blocked_table WHERE ip=INET6_ATON(%s) LIMIT 1", $ip );
+	private function unblock_ip() {
+		$query = $this->wpdb->prepare( "DELETE QUICK FROM $this->blocked_table WHERE ip=%s LIMIT 1", $this->request_ip );
 		$this->wpdb->query( $query );
 	}
 
 	private function is_blocked_ip() {
-		$ip = $this->get_request_ip();
-		if( empty( $ip ) )
-			return false;
-
-		$query = $this->wpdb->prepare( "SELECT * FROM $this->blocked_table WHERE ip=INET6_ATON(%s) LIMIT 1", $ip );
+		$query = $this->wpdb->prepare( "SELECT INET6_NTOA(ip) as ip, risk_level, created FROM $this->blocked_table WHERE ip=%s LIMIT 1", $this->request_ip );
 		$blocked = $this->wpdb->get_row( $query );
 		return $blocked;
 	}
