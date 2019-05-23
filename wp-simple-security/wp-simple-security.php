@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.1.1
+Version: 3.1.2
 Author: Matthew Sigley
 License: GPL2
 */
@@ -217,10 +217,8 @@ class WPSimpleSecurity {
 
 		//Create access log table
 		$sql = "CREATE TABLE IF NOT EXISTS `".$this->admin_access_log_table."` (
-						`id` bigint(20) unsigned NOT NULL auto_increment,
 						`ip` VARBINARY(16) NOT NULL,
 						`accessed` DATETIME NOT NULL,
-						PRIMARY KEY (`id`),
 						KEY ip (`ip`)
 					) $charset_collate;";
 		dbDelta($sql);
@@ -246,7 +244,7 @@ class WPSimpleSecurity {
 	public function intercept_bad_requests() {
 		// Randomly clean table data on requests. ~%1 chance of this not happening in 25 requests.
 		// Deletes expired ip blocks and old ip access log data.
-		if ( !mt_rand(0, 5) ) 
+		//if ( !mt_rand(0, 5) ) 
 			$this->gc_table_data();
 
 		//Block all XMLRPC API requests
@@ -584,7 +582,7 @@ class WPSimpleSecurity {
 		}
 
 		//Use DAY units for better DB memcache support (redis)
-		$now = current_time('Y-m-d 00:00:00');
+		$now = current_time('Y-m-d 23:59:59');
 
 		// Delete old admin access log data
 		$num_to_clean = $this->wpdb->get_var( "SELECT COUNT(1) as num_to_clean FROM $this->admin_access_log_table WHERE 2 <= TIMESTAMPDIFF( DAY, accessed, '$now' )" );
