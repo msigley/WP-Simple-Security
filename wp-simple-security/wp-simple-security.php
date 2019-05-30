@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.1.2
+Version: 3.1.3
 Author: Matthew Sigley
 License: GPL2
 */
@@ -520,6 +520,7 @@ class WPSimpleSecurity {
 				if( $good_link_num != $i )
 					$link_nonce_action .= $i;
 				$link_url = add_query_arg( 'unblock_ip', urlencode( $this->create_nonce( $link_nonce_action ) ), $unblock_url );
+				$link_url = htmlentities( $link_url, ENT_QUOTES | ENT_DISALLOWED, "UTF-8" );;
 				$message .= '<a class="unblock-link" href="' . $link_url . '" style="display: none;">Please unblock my IP address</a>';
 			}
 			$good_link_num_obf = mt_rand(12, 24);
