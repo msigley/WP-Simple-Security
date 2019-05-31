@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.1.3
+Version: 3.1.4
 Author: Matthew Sigley
 License: GPL2
 */
@@ -56,7 +56,7 @@ class WPSimpleSecurity {
 				$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP );
 			else
 				$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE );
-			$this->request_ip = inet_pton( $ip );
+			$this->request_ip = @inet_pton( $ip );
 			$this->use_ip_blocker = !empty( $this->request_ip );
 		}
 
@@ -80,7 +80,10 @@ class WPSimpleSecurity {
 						$whitelisted_ip = substr( $whitelisted_ip, 0, $slash_pos );
 					}
 
-					$ip = inet_pton( $whitelisted_ip );
+					$ip = @inet_pton( $whitelisted_ip );
+					if( empty($ip) )
+						continue;
+					
 					$ip_len = strlen( $ip );
 
 					$whitelisted_ip = array(
