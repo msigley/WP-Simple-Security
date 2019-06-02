@@ -28,7 +28,7 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 * Protects the wp-login.php form from brute force attacks by adding a second layer of authentication.
 #### How to use the hidden login form
 1. Add ```define('SIMPLE_SECURITY_LOGIN_TOKEN_NAME', 'token_name');``` into your wp-config.php file.
-2. Add ```define('SIMPLE_SECURITY_LOGIN_TOKEN_NAME', 'token_value');``` into your wp-config.php file.
+2. Add ```define('SIMPLE_SECURITY_LOGIN_TOKEN_VALUE', 'token_value');``` into your wp-config.php file.
 3. You login form can now only be accessed via the following url:
 ```https://example.com/wp-login.php?token_name=token_value```
 
