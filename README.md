@@ -9,9 +9,9 @@ Simple Wordpress Security plugin for preventing comment spam and brute force att
 * Implements an HTTP tarpit against bad login requests to deter attackers and waste their time.
 https://github.com/msigley/PHP-HTTP-Tarpit
   * The default is to send "Access Denied" messages on bad requests.
-  * If you wish to enable the HTTP tarpit, add ```defined('SIMPLE_SECURITY_USE_TARPIT', true);``` into your wp-config.php file.
+  * If you wish to enable the HTTP tarpit, add ```define('SIMPLE_SECURITY_USE_TARPIT', true);``` into your wp-config.php file.
 * Sanitizes the version query arguement on .css and .js files to prevent version fingerprinting.
-  * If you wish to customize the version number,  add ```defined('CSSJSVERSION', 'version_number');``` into your wp-config.php file.
+  * If you wish to customize the version number,  add ```define('CSSJSVERSION', 'version_number');``` into your wp-config.php file.
 * Completely disables the XMLRPC API.
 * Removes the WP version from the site header to prevent version fingerprinting.
 * Completely disables trackbacks.
@@ -27,8 +27,8 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 * Hides the wp-login.php form from public view.
 * Protects the wp-login.php form from brute force attacks by adding a second layer of authentication.
 #### How to use the hidden login form
-1. Add ```defined('SIMPLE_SECURITY_LOGIN_TOKEN_NAME', 'token_name');``` into your wp-config.php file.
-2. Add ```defined('SIMPLE_SECURITY_LOGIN_TOKEN_NAME', 'token_value');``` into your wp-config.php file.
+1. Add ```define('SIMPLE_SECURITY_LOGIN_TOKEN_NAME', 'token_name');``` into your wp-config.php file.
+2. Add ```define('SIMPLE_SECURITY_LOGIN_TOKEN_NAME', 'token_value');``` into your wp-config.php file.
 3. You login form can now only be accessed via the following url:
 ```https://example.com/wp-login.php?token_name=token_value```
 
@@ -38,8 +38,8 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 * Blocked visitors will receive a message stating their IP has been blocked with a link to unblock their IP address.
 * Blocked visitors that attempt to manipulate the unblock system recieve a permanent hour block.
 ### How to use the IP Blocker
-1. Add ```defined('SIMPLE_SECURITY_USE_IP_BLOCKER', true);``` into your wp-config.php file.
-2. Add ```defined('SIMPLE_SECURITY_BLOCK_INTERNAL_IPS', true);``` into your wp-config.php file if you wish to block internal and reserved IP ranges. The default is to not block these IP ranges.
+1. Add ```define('SIMPLE_SECURITY_USE_IP_BLOCKER', true);``` into your wp-config.php file.
+2. Add ```define('SIMPLE_SECURITY_BLOCK_INTERNAL_IPS', true);``` into your wp-config.php file if you wish to block internal and reserved IP ranges. The default is to not block these IP ranges.
 
 ## Whitelisted IPs
 * Prevents a list of IP addresses from being sent to the tarpit or from being blocked by the IP Blocker.
