@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.1.4
+Version: 3.2.0
 Author: Matthew Sigley
 License: GPL2
 */
@@ -133,7 +133,7 @@ class WPSimpleSecurity {
 			}
 		}
 
-		if( defined('CSSJSVERSION') && !empty( CSSJSVERSION ) )
+		if( defined( 'CSSJSVERSION' ) && !empty( CSSJSVERSION ) )
 			$this->css_js_version = CSSJSVERSION;
 		else
 			$this->css_js_version = date( 'Y-W', current_time('timestamp') );
@@ -160,7 +160,9 @@ class WPSimpleSecurity {
 		//Prevents arbitrary file deletion attack through post thumbnail meta
 		add_filter( 'wp_update_attachment_metadata', array( $this, 'sanitize_thumbnail_paths' ) );
 
-		if( !is_admin() ) {
+		if( is_admin() ) {
+			add_action( 'init', array( $this, 'intercept_bad_admin_requests' ), 1 ); // Delayed to init to allow user capability check
+		} else {
 			//Replace Cheatin', uh? messages with something more professional
 			//Sets a new wp_die_handler
 			add_filter( 'wp_die_handler', array( $this, 'wp_die_handler' ) );
@@ -247,8 +249,7 @@ class WPSimpleSecurity {
 	public function intercept_bad_requests() {
 		// Randomly clean table data on requests. ~%1 chance of this not happening in 25 requests.
 		// Deletes expired ip blocks and old ip access log data.
-		//if ( !mt_rand(0, 5) ) 
-			$this->gc_table_data();
+		$this->gc_table_data();
 
 		//Block all XMLRPC API requests
 		$this->intercept_xmlrpc_request();
@@ -369,6 +370,22 @@ class WPSimpleSecurity {
 			$thumbnail_data['thumb'] = basename( $thumbnail_data['thumb'] );
 		
 		return $thumbnail_data;
+	}
+
+	/**
+	 * WP Admin protection functions
+	 */
+	public function intercept_bad_admin_requests() {
+		$doing_wp_ajax = defined( 'DOING_AJAX' ) && DOING_AJAX && !empty( $_REQUEST['action'] );
+		if( $doing_wp_ajax || current_user_can( 'edit_posts' ) )
+			return;
+		
+		if( $this->use_ip_blocker )
+			$this->log_request();
+		if( $this->use_tarpit )
+			include 'includes/la_brea.php';
+
+		wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
 	}
 
 	/**
