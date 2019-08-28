@@ -19,6 +19,9 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 * Disables the author query var to prevent user enumeration.
 * Removes bad comment author urls from comment listings.
 
+## WP Admin Protections
+* Access to WP Admin area is blocked unless current user has the 'edit_posts' capability.
+
 ## Login Form Protections
 ### Login Form Nonce Verification
 * Adds a nonce field to the the wp-login.php form.
