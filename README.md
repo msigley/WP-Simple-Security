@@ -13,6 +13,7 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 * Sanitizes the version query arguement on .css and .js files to prevent version fingerprinting.
   * If you wish to customize the version number,  add ```define('CSSJSVERSION', 'version_number');``` into your wp-config.php file.
 * Completely disables the XMLRPC API.
+* Block external wp-cron.php requests if not using ALTERNATE_WP_CRON. This prevents potential DDOS vectors.
 * Removes the WP version from the site header to prevent version fingerprinting.
 * Completely disables trackbacks.
 * Limits the length of all fields on a comment form to prevent SQL injection.
