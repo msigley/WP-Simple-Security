@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.2.0
+Version: 3.3.0
 Author: Matthew Sigley
 License: GPL2
 */
@@ -50,15 +50,15 @@ class WPSimpleSecurity {
 			$this->login_token_value = SIMPLE_SECURITY_LOGIN_TOKEN_VALUE;
 		}
 
-		if( $this->use_ip_blocker ) {
-			$ip = $_SERVER['REMOTE_ADDR'];
-			if( $this->block_internal_ips )
-				$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP );
-			else
-				$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE );
-			$this->request_ip = @inet_pton( $ip );
+		$ip = $_SERVER['REMOTE_ADDR'];
+		if( $this->block_internal_ips )
+			$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP );
+		else
+			$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE );
+		$this->request_ip = @inet_pton( $ip );
+
+		if( $this->use_ip_blocker )
 			$this->use_ip_blocker = !empty( $this->request_ip );
-		}
 
 		if( $this->use_ip_blocker && defined( 'SIMPLE_SECURITY_WHITELISTED_IPS' ) && !empty( SIMPLE_SECURITY_WHITELISTED_IPS ) ) {
 			$whitelisted_ips_cache_key = SIMPLE_SECURITY_WHITELISTED_IPS;
@@ -251,6 +251,10 @@ class WPSimpleSecurity {
 		// Deletes expired ip blocks and old ip access log data.
 		$this->gc_table_data();
 
+		//Block external WP Cron requests if not using the alternate wp cron method
+		if( !defined( 'ALTERNATE_WP_CRON' ) || empty( ALTERNATE_WP_CRON ) )
+			$this->intercept_wp_cron_request();
+
 		//Block all XMLRPC API requests
 		$this->intercept_xmlrpc_request();
 
@@ -386,6 +390,22 @@ class WPSimpleSecurity {
 			include 'includes/la_brea.php';
 
 		wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
+	}
+
+	/**
+	 * WP Cron protection functions
+	 */
+	private function intercept_wp_cron_request() {
+		$script_name = strtolower( $_SERVER['SCRIPT_NAME'] );
+
+		if( $this->site_root . '/wp-cron.php' === $this->script_name && !empty( $this->request_ip ) && $this->request_ip !== @inet_pton( '127.0.0.1' ) ) {
+			if( $this->use_ip_blocker )
+				$this->log_request();
+			if( $this->use_tarpit )
+				include 'includes/la_brea.php';
+			
+			wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
+		}
 	}
 
 	/**
