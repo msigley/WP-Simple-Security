@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.3.0
+Version: 3.3.2
 Author: Matthew Sigley
 License: GPL2
 */
@@ -142,6 +142,8 @@ class WPSimpleSecurity {
 		register_activation_hook( __FILE__, array( $this, 'activation' ) );
 
 		//General protections
+		//Remove insecure http headers
+		add_filter( 'wp_headers', array( $this, 'remove_insecure_http_headers' ) );
 		//Removes the WordPress version from the header for security
 		add_filter( 'the_generator', array( $this, 'wb_remove_version' ) );
 		//Remove XMLRPC API meta tag from head
@@ -291,6 +293,12 @@ class WPSimpleSecurity {
 		}
 	}
 	
+	public function remove_insecure_http_headers( $headers ) {
+		unset( $headers['X-Pingback'] );
+
+		return $headers;
+	}
+
 	public function wb_remove_version() {
 		return '';
 	}
@@ -439,7 +447,7 @@ class WPSimpleSecurity {
 			return;
 		}
 
-		if( empty( $_REQUEST[$this->login_token_name] ) || $_REQUEST[$this->login_token_name] !== $this->login_token_value ) {
+		if( !empty( $this->login_token_name ) && ( empty( $_REQUEST[$this->login_token_name] ) || $_REQUEST[$this->login_token_name] !== $this->login_token_value ) ) {
 			if( $this->use_ip_blocker )
 				$this->log_request();
 			if( $this->use_tarpit )
