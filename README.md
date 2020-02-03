@@ -15,13 +15,26 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 * Completely disables the XMLRPC API.
 * Block external wp-cron.php requests if not using ALTERNATE_WP_CRON. This prevents potential DDOS vectors.
 * Removes the WP version from the site header to prevent version fingerprinting.
-* Completely disables trackbacks.
-* Limits the length of all fields on a comment form to prevent SQL injection.
 * Disables the author query var to prevent user enumeration.
-* Removes bad comment author urls from comment listings.
 
 ## WP Admin Protections
 * Access to WP Admin area is blocked unless current user has the 'edit_posts' capability.
+
+## Anti Spam Features
+* Completely disables trackbacks.
+* Limits the length of all fields on a comment form to prevent SQL injection.
+* Adds nonce protection to comment forms.
+* Adds a hidden captcha fiels to all comment forms.
+* Removes bad comment author urls from comment listings.
+* Spam requests are forwarded to a honeypot script.
+  * If you wish to enable this feature, add ```define('SIMPLE_SECURITY_PROJECT_HONEY_POT_URL', '<honeypot_url>');``` into your wp-config.php file.
+  * You can obtain a honeypot script by joining Project Honey Pot here: https://www.projecthoneypot.org/index.php
+* All non-GET requests are checked for the following:
+  * Common headless browser user agent strings.
+  * Unsafe referer urls.
+  * Bad IP reputation with the http:BL service.
+    * If you wish to enable this feature, add ```define('SIMPLE_SECURITY_PROJECT_HONEY_POT_HTTP_BL_ACCESS_KEY', '<http:BL_access_key>');``` into your wp-config.php file.
+    * You can read more about the http:BL service here: https://www.projecthoneypot.org/httpbl_api.php
 
 ## Login Form Protections
 ### Login Form Nonce Verification
