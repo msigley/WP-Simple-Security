@@ -24,7 +24,7 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 * Completely disables trackbacks.
 * Limits the length of all fields on a comment form to prevent SQL injection.
 * Adds nonce protection to comment forms.
-* Adds a hidden captcha fiels to all comment forms.
+* Adds a hidden captcha field to all comment forms.
 * Removes bad comment author urls from comment listings.
 * Spam requests are forwarded to a honeypot script.
   * If you wish to enable this feature, add ```define('SIMPLE_SECURITY_PROJECT_HONEY_POT_URL', '<honeypot_url>');``` into your wp-config.php file.
