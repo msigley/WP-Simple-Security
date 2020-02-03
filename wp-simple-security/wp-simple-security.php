@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.3.2
+Version: 3.4.1
 Author: Matthew Sigley
 License: GPL2
 */
@@ -14,14 +14,21 @@ class WPSimpleSecurity {
 	private $use_tarpit = false;
 	private $use_ip_blocker = false;
 	private $block_internal_ips = false;
+	private $http_bl_access_key = '';
+	private $honeypot_url = null;
 	private $login_token_name = null;
 	private $login_token_value = null;
 	private $request_ip = null;
+	private $request_ip_dot_notation = '';
 	private $site_root = '';
 	private $script_name = '';
 	private $wpdb = null;
 	private $admin_access_log_table = '';
 	private $blocked_table = '';
+
+	private $blocked_timeout_in_hours = 1;
+	private $bad_request_time_period_in_minutes = 30;
+	private $num_bad_requests_in_time_period = 5;
 
 	private function __construct() {
 		global $wpdb;
@@ -40,9 +47,15 @@ class WPSimpleSecurity {
 
 		if( defined( 'SIMPLE_SECURITY_USE_IP_BLOCKER' ) )
 			$this->use_ip_blocker = !empty( SIMPLE_SECURITY_USE_IP_BLOCKER );
-		
+
 		if( defined( 'SIMPLE_SECURITY_BLOCK_INTERNAL_IPS' ) )
 			$this->block_internal_ips = !empty( SIMPLE_SECURITY_BLOCK_INTERNAL_IPS );
+
+		if( defined( 'SIMPLE_SECURITY_PROJECT_HONEY_POT_HTTP_BL_ACCESS_KEY' ) )
+			$this->http_bl_access_key = SIMPLE_SECURITY_PROJECT_HONEY_POT_HTTP_BL_ACCESS_KEY;
+
+		if( defined( 'SIMPLE_SECURITY_PROJECT_HONEY_POT_URL' ) )
+			$this->honeypot_url = SIMPLE_SECURITY_PROJECT_HONEY_POT_URL;
 
 		if( defined( 'SIMPLE_SECURITY_LOGIN_TOKEN_NAME' ) && defined( 'SIMPLE_SECURITY_LOGIN_TOKEN_VALUE' ) 
 			&& !empty( SIMPLE_SECURITY_LOGIN_TOKEN_NAME ) && !empty( SIMPLE_SECURITY_LOGIN_TOKEN_VALUE ) ) {
@@ -56,6 +69,7 @@ class WPSimpleSecurity {
 		else
 			$ip = (string) filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE );
 		$this->request_ip = @inet_pton( $ip );
+		$this->request_ip_dot_notation = $ip;
 
 		if( $this->use_ip_blocker )
 			$this->use_ip_blocker = !empty( $this->request_ip );
@@ -154,8 +168,9 @@ class WPSimpleSecurity {
 		add_filter( 'pings_open', array( $this, 'disable_all_trackbacks' ), 10, 2 );
 		//Removes Trackbacks from the comment count
 		add_filter( 'get_comments_number', array( $this, 'comment_count' ), 0 );
-		//Limits the length of all fields from a comment form
-		add_filter( 'preprocess_comment', array( $this, 'limit_comment_field_length' ) );
+		//Prevents bad comment content
+		add_action( 'comment_form', array( $this, 'comment_form' ) );
+		add_filter( 'pre_comment_on_post', array( $this, 'pre_comment_on_post' ) );
 		//Removes insecure information on dependancy includes
 		add_action( 'wp_print_scripts', array( $this, 'sanitize_scripts' ), 9999 );
 		add_action( 'wp_print_styles', array( $this, 'sanitize_styles' ), 9999 );
@@ -169,6 +184,8 @@ class WPSimpleSecurity {
 			//Sets a new wp_die_handler
 			add_filter( 'wp_die_handler', array( $this, 'wp_die_handler' ) );
 			
+			// Remove a tags from the tags allowed in comments
+			add_action( 'init', array( $this, 'remove_bad_comment_tags' ) );
 			//Remove author query vars to prevent DB enumeration
 			add_filter('query_vars', array( $this, 'remove_insecure_query_vars' ) );
 			//Remove Bad Comment Author URLS
@@ -251,7 +268,8 @@ class WPSimpleSecurity {
 	public function intercept_bad_requests() {
 		// Randomly clean table data on requests. ~%1 chance of this not happening in 25 requests.
 		// Deletes expired ip blocks and old ip access log data.
-		$this->gc_table_data();
+		//if ( !mt_rand(0, 5) )
+			$this->gc_table_data();
 
 		//Block external WP Cron requests if not using the alternate wp cron method
 		if( !defined( 'ALTERNATE_WP_CRON' ) || empty( ALTERNATE_WP_CRON ) )
@@ -264,8 +282,10 @@ class WPSimpleSecurity {
 		$this->intercept_login_request();
 
 		//Stop here if IP is blocked. This is intercepted last to allow bad requests to continue to hit the tarpit.
-		if( $this->use_ip_blocker )
+		if( $this->use_ip_blocker ) {
 			$this->intercept_blocked_request();
+			$this->intercept_non_get_request();
+		}
 	}
 
 	/**
@@ -306,7 +326,14 @@ class WPSimpleSecurity {
 	public function disable_all_trackbacks($open, $post_id) {
 		return false;
 	}
-	
+
+	public function remove_bad_comment_tags() {
+		global $allowedtags;
+
+		if( !current_user_can( 'edit_posts' ) )
+			unset( $allowedtags['a'] );
+	}
+
 	public function comment_count( $count ) {
 		if ( ! is_admin() ) {
 			global $id;
@@ -339,27 +366,44 @@ class WPSimpleSecurity {
 		return $url;
 	}
 
-	public function limit_comment_field_length( $commentdata ) {
-		$data_lengths = array_map( 'mb_strlen', $commentdata );
-		$bad_length = false;
-		if( 255 < $data_lengths['comment_author'] )
-			$bad_length = true;
-		elseif( 100 < $data_lengths['comment_author_email'] )
-			$bad_length = true;
-		elseif( 200 < $data_lengths['comment_author_url'] )
-			$bad_length = true;
-		elseif( 65535 < $data_lengths['comment_content'] )
-			$bad_length = true;
+	public function comment_form( $post_id ) {
+		$this->hidden_math_captcha_field( $post_id );
+		$this->nonce_field( 'simple_security_comment_' . $post_id, 'simple_security_comment_nonce' );
+	}
+
+	public function pre_comment_on_post( $comment_post_ID ) {
+		if( !current_user_can( 'edit_posts' ) ) {
+			//Prevent links in comments
+			if( preg_match( '/<\s*a/i', $_POST['comment'] ) )
+				wp_die('We no longer allow &lta&gt tags to be posted in our comments. Please remove your &lta&gt tag and try again.');
 			
-		if( $bad_length ) {
+			if( false !== stripos( $_POST['comment'], '://' ) )
+				wp_die('We no longer allow urls to be posted in our comments. Please remove your url and try again.');
+		}
+
+		//Prevent comment data length overflow
+		if( 255 < strlen( $_POST['author'] )
+			|| 100 < strlen( $_POST['email'] )
+			|| 200 < strlen( $_POST['url'] )
+			|| 65535 < strlen( $_POST['comment'] )
+			//Verify captcha
+			|| !$this->verify_hidden_math_captcha( $_POST['sec_qa'], $comment_post_ID )
+			//Verify comment form nonce
+			|| !$this->verify_nonce( $_POST['simple_security_comment_nonce'], 'simple_security_comment_' . $comment_post_ID ) ) {
 			if( $this->use_ip_blocker )
 				$this->log_request();
-			
+
+			if( !empty( $this->honeypot_url ) ) {
+				wp_redirect( $this->honeypot_url, 307 ); // Use status 307 to encourage the bot to send the POST again for the honeypot
+				die();
+			}
+
 			//Send comment flood message since its in core and will confuse and slow down bots that recognize it
 			if ( defined( 'DOING_AJAX' ) )
-				die( __( 'You are posting comments too quickly.  Slow down.' ) );
-			wp_die( __( 'You are posting comments too quickly.  Slow down.' ) );
+				die( __( 'You are posting comments too quickly. Slow down.' ) );
+			wp_die( __( 'You are posting comments too quickly. Slow down.' ) );
 		}
+
 		return $commentdata;
 	}
 	
@@ -499,6 +543,86 @@ class WPSimpleSecurity {
 	}
 
 	/**
+	 * Anti Spam functions
+	 */
+
+	/**
+	 * Look up request IP with the http:BL DNS service
+	 * https://www.projecthoneypot.org/httpbl_api.php
+	 */
+	private function is_spam_ip() {
+		if( empty( $this->http_bl_access_key ) )
+			return false;
+
+		$is_spam = wp_cache_get( $this->request_ip_dot_notation, 'simple_security_is_spam_ip' );
+		if( false !== $is_spam )
+			return !empty( $is_spam );
+
+		$ip_parts = explode( '.', $this->request_ip_dot_notation );
+		if( count( $ip_parts ) !== 4 )
+			return false;
+
+		$reversed_ip = implode( '.', array_reverse( $ip_parts ) );
+		$http_bl_response = dns_get_record( "{$this->http_bl_access_key}.$reversed_ip.dnsbl.httpbl.org.", DNS_A );
+
+		// Use strings to store boolean value since false is used to indicate no value exists in the cache
+		$is_spam = '0'; // NXDOMAIN means IP is not in the DB
+		if( !empty( $http_bl_response ) ) {
+			$http_bl_response = explode( '.', $http_bl_response[0]['ip'] );
+			if( count( $http_bl_response ) !== 4 ) // Bad or malformed response
+				$is_spam = '0';
+			else if( $http_bl_response[0] != 127 ) // First octet is the error code. 127 is a good lookup.
+				$is_spam = '0';
+			else if( $http_bl_response[1] > 6 ) // Second octet is the number of days since last activity.
+				$is_spam = '0';
+			else if( $http_bl_response[2] >= 25 ) // Third octet is the treat score. A score of 25 is equivelent to sending 100 spam emails to a honeypot in one day.
+				$is_spam = '1';
+			else if( $http_bl_response[3] > 1 ) // Forth octet is the type of visitor. 0 is search engine. 1 is suspicious.
+				$is_spam = '1';
+		}
+
+		wp_cache_set( $this->request_ip_dot_notation, $is_spam, 'simple_security_is_spam_ip', DAY_IN_SECONDS );
+
+		return !empty( $is_spam );
+	}
+
+	private function hidden_math_captcha_field( $action = 0 ) {
+		$action = $this->hidden_math_captcha_action( $action );
+		$captcha_value = mt_rand( 1, 9 ) + 18 + $action;
+		if( mt_rand( 0, 1 ) )
+			$captcha_value *= -1;
+		
+		// Setting the value via javascript forces javascript to be enabled for form submission
+		?>
+		<div style="position: absolute; clip: rect(0px 1px 1px 0px);">
+			<label for="sec_qa">What is <?php echo mt_rand( 1, 9 ); ?> <?php echo ( mt_rand( 0, 1) ? '+' : '-' ); ?> <?php echo mt_rand( 1, 9 ); ?>?</label>
+			<input name="sec_qa" type="text" autocomplete="security_question_answer" value="" tabindex="-1" />
+		</div>
+		<script type="text/javascript">
+			document.currentScript.previousElementSibling.querySelector('input[name=sec_qa]').value = '<?php echo $captcha_value; ?>';
+		</script>
+		<noscript>
+			Javascript is required to be enabled for the submission of this form.
+		</noscript>
+		<?php
+	}
+
+	private function verify_hidden_math_captcha( $captcha_value, $action = 0 ) {
+		$action = $this->hidden_math_captcha_action( $action );
+		return is_numeric( $captcha_value ) && abs( $captcha_value ) >= 18 + $action;
+	}
+
+	// Action generation is for obfuscation not security
+	private function hidden_math_captcha_action( $action ) {
+		if( !is_numeric( $action ) ) {
+			$action = (string)$action;
+			$action = substr( $action, -1 );
+			$action = ord( $action );
+		}
+		return $action %= 10;
+	}
+
+	/**
 	 * Nonce functions
 	 */
 	private function nonce_field( $action = -1, $name = "_nonce", $echo = true ) {
@@ -535,13 +659,40 @@ class WPSimpleSecurity {
 	/**
 	 * Bad IP protection functions
 	 */
+	private function intercept_non_get_request() {
+		if( 'GET' === strtoupper( $_SERVER['REQUEST_METHOD'] ) )
+			return;
+
+		// Include wp_validate_redirect and wp_redirect since they aren't available yet
+		require_once( ABSPATH . WPINC . '/pluggable.php' );
+
+		if( empty( $_SERVER['HTTP_USER_AGENT'] ) 
+			// Block popular headless browsers
+			|| false !== stripos( $_SERVER['HTTP_USER_AGENT'], 'headlesschrome' ) // Headless Chrome
+			|| false !== stripos( $_SERVER['HTTP_USER_AGENT'], 'phantomjs' ) // PhantomJS
+			|| false !== stripos( $_SERVER['HTTP_USER_AGENT'], 'slimerjs' ) // SlimerJS
+			|| false !== stripos( $_SERVER['HTTP_USER_AGENT'], 'splash' ) // Splash'
+			// Block requests with an unsafe referer
+			|| ( !empty( $_SERVER['HTTP_REFERER'] ) && !wp_validate_redirect( $_SERVER['HTTP_REFERER'], false ) )
+			// Block IPs with spam reps in http:BL
+			|| $this->is_spam_ip() ) {
+			$this->block_ip();
+
+			if( !empty( $this->honeypot_url ) )
+				wp_redirect( $this->honeypot_url, 307 ); // Use status 307 to encourage the bot to send the POST again for the honeypot
+			else
+				wp_redirect( get_bloginfo( 'url' ), 303 );
+			die();
+		}
+	}
+
 	private function intercept_blocked_request() {
 		$blocked_ip = $this->is_blocked_ip();
 		if( empty( $blocked_ip ) )
 			return;
-		
-		// Include wp_nonce functions since they aren't available yet
-		require( ABSPATH . WPINC . '/pluggable.php' );
+
+		// Include wp_nonce functions and wp_redirect since they aren't available yet
+		require_once( ABSPATH . WPINC . '/pluggable.php' );
 
 		$nonce_action = 'simple_security_unblock_ip|' . $blocked_ip->ip . '|' . $blocked_ip->created;
 		$unblock_url = remove_query_arg( 'unblock_ip', $this->self_uri() );
@@ -553,7 +704,7 @@ class WPSimpleSecurity {
 			else
 				$this->block_ip( 'medium' ); // Failed attempt to unblock IP, raise risk level and renew block
 			
-			wp_redirect( $unblock_url, 307 );
+			wp_redirect( $unblock_url, 303 );
 			die();
 		}
 		
@@ -584,63 +735,62 @@ class WPSimpleSecurity {
 	 */
 	private function log_request() {
 		$now = current_time( 'mysql' );
-		$query = $this->wpdb->prepare( "INSERT INTO $this->admin_access_log_table (ip, accessed) VALUES (%s, %s)", $this->request_ip, $now );
+		$query = $this->wpdb->prepare( "INSERT INTO {$this->admin_access_log_table} (ip, accessed) VALUES (%s, %s)", $this->request_ip, $now );
 		$this->wpdb->query( $query );
 
-		$query = $this->wpdb->prepare( "SELECT COUNT(1) as num_access_attempts FROM $this->admin_access_log_table WHERE ip=%s AND 30 >= TIMESTAMPDIFF( MINUTE, accessed, %s )", $this->request_ip, $now );
+		$query = $this->wpdb->prepare( "SELECT COUNT(1) as num_access_attempts FROM {$this->admin_access_log_table} WHERE ip=%s AND {$this->bad_request_time_period_in_minutes} >= TIMESTAMPDIFF( MINUTE, accessed, %s )", $this->request_ip, $now );
 		$num_access_attempts = $this->wpdb->get_var( $query );
-		if( $num_access_attempts >= 5 )
+		if( $num_access_attempts >= $this->num_bad_requests_in_time_period )
 			$this->block_ip();
 	}
 
 	private function block_ip( $risk_level = 'low' ) {
 		$now = current_time( 'mysql' );
-		$query = $this->wpdb->prepare( "REPLACE INTO $this->blocked_table (ip, risk_level, created) VALUES (%s, %s, %s)", $this->request_ip, $risk_level, $now );
+		$query = $this->wpdb->prepare( "REPLACE INTO {$this->blocked_table} (ip, risk_level, created) VALUES (%s, %s, %s)", $this->request_ip, $risk_level, $now );
 		$this->wpdb->query( $query );
 	}
 
 	private function unblock_ip() {
-		$query = $this->wpdb->prepare( "DELETE QUICK FROM $this->blocked_table WHERE ip=%s LIMIT 1", $this->request_ip );
+		wp_cache_set( $this->request_ip_dot_notation, '0', 'simple_security_is_spam_ip', DAY_IN_SECONDS ); // Prevent spam ip blocks from being issued again without bad activity
+		$query = $this->wpdb->prepare( "DELETE QUICK FROM {$this->blocked_table} WHERE ip=%s LIMIT 1", $this->request_ip );
 		$this->wpdb->query( $query );
 	}
 
 	private function is_blocked_ip() {
-		$query = $this->wpdb->prepare( "SELECT INET6_NTOA(ip) as ip, risk_level, created FROM $this->blocked_table WHERE ip=%s LIMIT 1", $this->request_ip );
+		//Use HOUR units for better DB memcache support (redis)
+		$now = current_time('Y-m-d H:00:00');
+		$query = $this->wpdb->prepare( "SELECT INET6_NTOA(ip) as ip, risk_level, created FROM {$this->blocked_table} WHERE ip=%s AND {$this->blocked_timeout_in_hours} > TIMESTAMPDIFF( HOUR, created, '$now' ) LIMIT 1", $this->request_ip );
 		$blocked = $this->wpdb->get_row( $query );
 		return $blocked;
 	}
 
 	private function gc_table_data() {
-		//Use HOUR units for better DB memcache support (redis)
-		$blocked_timeout_in_hours = 1;
-
-		$now = current_time('Y-m-d H:00:00');
+		//Maintain logs for 7 days
+		//Use DAY units for better DB memcache support (redis)
+		$now = current_time('Y-m-d 23:59:59');
 
 		// Use DELETE QUICK for faster MyISAM (Aria) performance.
 		// Skips the repacking of the table that normally occurs.
 		// Since I/O on the admin access log and blocked tables are high, the file sizes don't really matter.
 
 		// Delete expired ip blocks.
-		$num_to_clean = $this->wpdb->get_var( "SELECT COUNT(1) as num_to_clean FROM $this->blocked_table WHERE $blocked_timeout_in_hours <= TIMESTAMPDIFF( HOUR, created, '$now' )" );
+		$num_to_clean = $this->wpdb->get_var( "SELECT COUNT(1) as num_to_clean FROM {$this->blocked_table} WHERE 7 < TIMESTAMPDIFF( DAY, created, '$now' )" );
 		if ( !empty( $num_to_clean ) ) {
 			$num_to_clean = (int)( $num_to_clean / 4 ); // Only DELETE 25% at a time.
 			if( $num_to_clean < 50 ) //Enforce minimum LIMIT for faster clean up
 				$num_to_clean = 50;
 			
-			$this->wpdb->query( "DELETE QUICK FROM $this->blocked_table WHERE $blocked_timeout_in_hours <= TIMESTAMPDIFF( HOUR, created, '$now' ) LIMIT $num_to_clean" );
+			$this->wpdb->query( "DELETE QUICK FROM {$this->blocked_table} WHERE 7 < TIMESTAMPDIFF( DAY, created, '$now' ) LIMIT $num_to_clean" );
 		}
 
-		//Use DAY units for better DB memcache support (redis)
-		$now = current_time('Y-m-d 23:59:59');
-
 		// Delete old admin access log data
-		$num_to_clean = $this->wpdb->get_var( "SELECT COUNT(1) as num_to_clean FROM $this->admin_access_log_table WHERE 2 <= TIMESTAMPDIFF( DAY, accessed, '$now' )" );
+		$num_to_clean = $this->wpdb->get_var( "SELECT COUNT(1) as num_to_clean FROM {$this->admin_access_log_table} WHERE 7 < TIMESTAMPDIFF( DAY, accessed, '$now' )" );
 		if ( !empty( $num_to_clean ) ) {
 			$num_to_clean = (int)( $num_to_clean / 4 ); // Only DELETE 25% at a time.
 			if( $num_to_clean < 50 ) //Enforce minimum LIMIT for faster clean up
 				$num_to_clean = 50;
 			
-			$this->wpdb->query( "DELETE QUICK FROM $this->admin_access_log_table WHERE 2 <= TIMESTAMPDIFF( HOUR, accessed, '$now' ) LIMIT $num_to_clean" );
+			$this->wpdb->query( "DELETE QUICK FROM {$this->admin_access_log_table} WHERE 7 <= TIMESTAMPDIFF( DAY, accessed, '$now' ) LIMIT $num_to_clean" );
 		}
 	}
 
