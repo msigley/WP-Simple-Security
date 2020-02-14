@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.4.1
+Version: 3.4.2
 Author: Matthew Sigley
 License: GPL2
 */
@@ -176,6 +176,18 @@ class WPSimpleSecurity {
 		add_action( 'wp_print_styles', array( $this, 'sanitize_styles' ), 9999 );
 		//Prevents arbitrary file deletion attack through post thumbnail meta
 		add_filter( 'wp_update_attachment_metadata', array( $this, 'sanitize_thumbnail_paths' ) );
+
+		//Tracking protections
+		//The fact this tracking can't be disabled by the end user is ridiculously unethical.
+		//To make matters worse, this tracking is only able to be disabled by exploiting the transient API instead of a 'allow_tracking' filter.
+		//Prevents browser tracking by Automatic
+		//See wp_check_browser_version()
+		if ( !empty( $_SERVER['HTTP_USER_AGENT'] ) )
+			add_filter( 'pre_site_transient_browser_' . md5( $_SERVER['HTTP_USER_AGENT'] ), '__return_null', 9999 );
+
+		//Prevents php version tracking by Automatic
+		//See wp_check_php_version()
+		add_filter( 'pre_site_transient_php_check_' . md5( phpversion() ), '__return_null', 9999 );
 
 		if( is_admin() ) {
 			add_action( 'init', array( $this, 'intercept_bad_admin_requests' ), 1 ); // Delayed to init to allow user capability check
