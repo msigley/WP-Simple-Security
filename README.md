@@ -1,3 +1,4 @@
+[![ko-fi](https://www.ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/A0A01FORH)
 # WP-Simple-Security
 Simple Wordpress Security plugin for preventing comment spam and brute force attacks.
 
