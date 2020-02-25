@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.4.2
+Version: 3.4.3
 Author: Matthew Sigley
 License: GPL2
 */
@@ -280,7 +280,7 @@ class WPSimpleSecurity {
 	public function intercept_bad_requests() {
 		// Randomly clean table data on requests. ~%1 chance of this not happening in 25 requests.
 		// Deletes expired ip blocks and old ip access log data.
-		//if ( !mt_rand(0, 5) )
+		if ( !mt_rand(0, 5) )
 			$this->gc_table_data();
 
 		//Block external WP Cron requests if not using the alternate wp cron method
@@ -599,24 +599,33 @@ class WPSimpleSecurity {
 	}
 
 	private function hidden_math_captcha_field( $action = 0 ) {
-		$action = $this->hidden_math_captcha_action( $action );
-		$captcha_value = mt_rand( 1, 9 ) + 18 + $action;
-		if( mt_rand( 0, 1 ) )
-			$captcha_value *= -1;
-		
-		// Setting the value via javascript forces javascript to be enabled for form submission
-		?>
-		<div style="position: absolute; clip: rect(0px 1px 1px 0px);">
-			<label for="sec_qa">What is <?php echo mt_rand( 1, 9 ); ?> <?php echo ( mt_rand( 0, 1) ? '+' : '-' ); ?> <?php echo mt_rand( 1, 9 ); ?>?</label>
-			<input name="sec_qa" type="text" autocomplete="security_question_answer" value="" tabindex="-1" />
-		</div>
-		<script type="text/javascript">
-			document.currentScript.previousElementSibling.querySelector('input[name=sec_qa]').value = '<?php echo $captcha_value; ?>';
-		</script>
-		<noscript>
-			Javascript is required to be enabled for the submission of this form.
-		</noscript>
-		<?php
+		$captcha_field = wp_cache_get( $action, 'simple_security_math_captcha_field' );
+		if( empty( $captcha_field ) ) {
+			$field_action = $this->hidden_math_captcha_action( $action );
+
+			$captcha_value = mt_rand( 1, 9 ) + 18 + $field_action;
+			if( mt_rand( 0, 1 ) )
+				$captcha_value *= -1;
+
+			ob_start();
+			// Setting the value via javascript forces javascript to be enabled for form submission
+			?>
+			<div style="position: absolute; clip: rect(0px 1px 1px 0px);">
+				<label for="sec_qa">What is <?php echo mt_rand( 1, 9 ); ?> <?php echo ( mt_rand( 0, 1) ? '+' : '-' ); ?> <?php echo mt_rand( 1, 9 ); ?>?</label>
+				<input name="sec_qa" type="text" autocomplete="security_question_answer" value="" tabindex="-1" />
+			</div>
+			<script type="text/javascript">
+				document.currentScript.previousElementSibling.querySelector('input[name=sec_qa]').value = '<?php echo $captcha_value; ?>';
+			</script>
+			<noscript>
+				Javascript is required to be enabled for the submission of this form.
+			</noscript>
+			<?php
+			$captcha_field = ob_get_contents();
+			ob_end_clean();
+			wp_cache_set( $action, $captcha_field, 'simple_security_math_captcha_field', HOUR_IN_SECONDS );
+		}
+		echo $captcha_field;
 	}
 
 	private function verify_hidden_math_captcha( $captcha_value, $action = 0 ) {
