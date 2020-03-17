@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.4.3
+Version: 3.4.4
 Author: Matthew Sigley
 License: GPL2
 */
@@ -598,7 +598,7 @@ class WPSimpleSecurity {
 		return !empty( $is_spam );
 	}
 
-	private function hidden_math_captcha_field( $action = 0 ) {
+	public function hidden_math_captcha_field( $action = 0 ) {
 		$captcha_field = wp_cache_get( $action, 'simple_security_math_captcha_field' );
 		if( empty( $captcha_field ) ) {
 			$field_action = $this->hidden_math_captcha_action( $action );
@@ -615,7 +615,11 @@ class WPSimpleSecurity {
 				<input name="sec_qa" type="text" autocomplete="security_question_answer" value="" tabindex="-1" />
 			</div>
 			<script type="text/javascript">
-				document.currentScript.previousElementSibling.querySelector('input[name=sec_qa]').value = '<?php echo $captcha_value; ?>';
+				var sec_qa = document.currentScript.previousElementSibling.querySelector('input[name=sec_qa]');
+				if( sec_qa ) {
+					sec_qa.value = '<?php echo $captcha_value; ?>';
+					sec_qa.defaultValue = '<?php echo $captcha_value; ?>';
+				}
 			</script>
 			<noscript>
 				Javascript is required to be enabled for the submission of this form.
@@ -628,7 +632,7 @@ class WPSimpleSecurity {
 		echo $captcha_field;
 	}
 
-	private function verify_hidden_math_captcha( $captcha_value, $action = 0 ) {
+	public function verify_hidden_math_captcha( $captcha_value, $action = 0 ) {
 		$action = $this->hidden_math_captcha_action( $action );
 		return is_numeric( $captcha_value ) && abs( $captcha_value ) >= 18 + $action;
 	}
@@ -697,13 +701,7 @@ class WPSimpleSecurity {
 			|| ( !empty( $_SERVER['HTTP_REFERER'] ) && !wp_validate_redirect( $_SERVER['HTTP_REFERER'], false ) )
 			// Block IPs with spam reps in http:BL
 			|| $this->is_spam_ip() ) {
-			$this->block_ip();
-
-			if( !empty( $this->honeypot_url ) )
-				wp_redirect( $this->honeypot_url, 307 ); // Use status 307 to encourage the bot to send the POST again for the honeypot
-			else
-				wp_redirect( get_bloginfo( 'url' ), 303 );
-			die();
+			$this->handle_spam_request();
 		}
 	}
 
@@ -749,6 +747,17 @@ class WPSimpleSecurity {
 		}
 		
 		wp_die( $message, 'IP Blocked', array( 'response' => 403 ) );
+	}
+
+	public function handle_spam_request() {
+		if( $this->use_ip_blocker )
+			$this->block_ip();
+
+		if( !empty( $this->honeypot_url ) )
+			wp_redirect( $this->honeypot_url, 307 ); // Use status 307 to encourage the bot to send the POST again for the honeypot
+		else
+			wp_redirect( get_bloginfo( 'url' ), 303 );
+		die();
 	}
 
 	/**
