@@ -64,7 +64,6 @@ class WPSimpleSecurity {
 		'<(script|meta)', // XXS
 		'javascript:',
 		'\/\*|\*\/|--|@@', // SQL Injection
-		'select|union|update|delete|insert|replace|table|dumpfile', 
 		'(?<!http|https):\/\/', // Remote file inclusion
 	);
 
