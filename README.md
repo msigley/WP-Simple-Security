@@ -17,9 +17,16 @@ https://github.com/msigley/PHP-HTTP-Tarpit
 * Block external wp-cron.php requests if not using ALTERNATE_WP_CRON. This prevents potential DDOS vectors.
 * Removes the WP version from the site header to prevent version fingerprinting.
 * Disables the author query var to prevent user enumeration.
+* Blocks common bad requests for the following attacks:
+  * Directory traversal
+  * Cross site scripting
+  * SQL injection
+  * Remote file inclusion
 
 ## WP Admin Protections
 * Access to WP Admin area is blocked unless current user has the 'edit_posts' capability.
+* Option to limit access to whitelisted IPs.
+  * If you wish to enable this feature, add ```define('SIMPLE_SECURITY_ENFORCE_WHITELIST_ADMIN_ACCESS', true);``` into your wp-config.php file.
 
 ## Anti Spam Features
 * Completely disables trackbacks.
@@ -36,6 +43,8 @@ https://github.com/msigley/PHP-HTTP-Tarpit
   * Bad IP reputation with the http:BL service.
     * If you wish to enable this feature, add ```define('SIMPLE_SECURITY_PROJECT_HONEY_POT_HTTP_BL_ACCESS_KEY', '<http:BL_access_key>');``` into your wp-config.php file.
     * You can read more about the http:BL service here: https://www.projecthoneypot.org/httpbl_api.php
+* Adds Cloudflare turnstile to all comment forms.
+  * If you wish to enable this feature, add ```define('SIMPLE_SECURITY_CLOUDFLARE_TURNSTILE_SITEKEY', '<cloudflare turnstile sitekey>');``` and ```define('SIMPLE_SECURITY_CLOUDFLARE_TURNSTILE_SECRETKEY', '<cloudflare turnstile secretkey>');``` into your wp-config.php file.
 
 ## Login Form Protections
 ### Login Form Nonce Verification
