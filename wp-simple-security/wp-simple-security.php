@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.9.0
+Version: 3.9.1
 Author: Matthew Sigley
 License: GPL2
 */
@@ -50,6 +50,10 @@ class WPSimpleSecurity {
 		'/WEB-INF/*', // Java Servlet config folder
 		'*.sqlite', '*.sqlite.gz', '*.sql', '*.sql.gz', '.mdb', // Common database file types
 		'/cgi-bin/*', '*.cgi', // Common Gateway Interface files
+		'/.env*', '/wp-config*', // Config files
+		'*/phpinfo.php*', // PHP version info
+		'*eval-stdin.php*', // RCE file
+		'*/wp-info.php*', '*/wp-css.php*' // Hacked WP site files (web shells)
 	);
 
 	private $restricted_query_vars = array(
@@ -81,8 +85,8 @@ class WPSimpleSecurity {
 
 		$this->script_name = parse_url( $_SERVER['REQUEST_URI'], PHP_URL_PATH );
 		$this->site_root = (string) parse_url( untrailingslashit( site_url() ), PHP_URL_PATH );
-		if( !empty( $site_root ) )
-			$this->script_name = substr( $script_name, strlen( $site_root ) );
+		if( !empty( $this->site_root ) )
+			$this->script_name = substr( $this->script_name, strlen( $this->site_root ) );
 
 		if( defined( 'SIMPLE_SECURITY_USE_TARPIT' ) )
 			$this->use_tarpit = !empty( SIMPLE_SECURITY_USE_TARPIT );
@@ -1016,7 +1020,8 @@ class WPSimpleSecurity {
 			$child_selector = $good_link_num_obf . 'n-' . ( $good_link_num_obf - $good_link_num );
 			$message .= '<style>.unblock-link:nth-child(' . $child_selector . ') { display: block !important; }</style>';
 		}
-		
+
+		add_filter( 'wp_die_xmlrpc_handler', function( $die_handler ) { return '_default_wp_die_handler'; } );
 		wp_die( $message, 'IP Blocked', array( 'response' => 403 ) );
 	}
 
