@@ -3,7 +3,7 @@
 Plugin Name: WP Simple Security
 Plugin URI: https://github.com/msigley
 Description: Simple Security for preventing comment spam and brute force attacks.
-Version: 3.9.1
+Version: 4.0.0
 Author: Matthew Sigley
 License: GPL2
 */
@@ -18,6 +18,7 @@ class WPSimpleSecurity {
 	private $honeypot_url = null;
 	private $login_token_name = null;
 	private $login_token_value = null;
+	private $enforce_admin_totp = false;
 	private $enforce_whitelist_admin_access = false;
 	private $cloudflare_turnstile_sitekey = '';
 	private $cloudflare_turnstile_secretkey = '';
@@ -37,9 +38,6 @@ class WPSimpleSecurity {
 	private $bad_request_time_period_in_minutes = 30;
 	private $num_bad_requests_in_time_period = 4;
 
-	// Nice reference for most important requests to block:
-	// https://github.com/wargio/naxsi/blob/main/naxsi_rules/naxsi_core.rules
-	
 	// Alot of the files and folders below aren't part of wordpress, but they are included here to catch bad traffic.
 	private $restricted_requests = array(
 		'/wp-cron.php*', // WP Cron
@@ -50,25 +48,10 @@ class WPSimpleSecurity {
 		'/WEB-INF/*', // Java Servlet config folder
 		'*.sqlite', '*.sqlite.gz', '*.sql', '*.sql.gz', '.mdb', // Common database file types
 		'/cgi-bin/*', '*.cgi', // Common Gateway Interface files
-		'/.env*', '/wp-config*', // Config files
-		'*/phpinfo.php*', // PHP version info
-		'*eval-stdin.php*', // RCE file
-		'*/wp-info.php*', '*/wp-css.php*' // Hacked WP site files (web shells)
 	);
 
 	private $restricted_query_vars = array(
-		'author', // User enumeration
-	);
-
-	private $restricted_values = array(
-		// \\\\ is one \
-		'\.\.(\/|\\\\)', // Directory traversal
-		'c:\\\\',
-		'cmd\.exe',
-		'<(script|meta)', // XXS
-		'javascript:',
-		'\/\*|\*\/|--|@@', // SQL Injection
-		'(?<!http|https):\/\/', // Remote file inclusion
+		'author'
 	);
 
 	private $restricted_comment_countries = array(
@@ -85,8 +68,8 @@ class WPSimpleSecurity {
 
 		$this->script_name = parse_url( $_SERVER['REQUEST_URI'], PHP_URL_PATH );
 		$this->site_root = (string) parse_url( untrailingslashit( site_url() ), PHP_URL_PATH );
-		if( !empty( $this->site_root ) )
-			$this->script_name = substr( $this->script_name, strlen( $this->site_root ) );
+		if( !empty( $site_root ) )
+			$this->script_name = substr( $script_name, strlen( $site_root ) );
 
 		if( defined( 'SIMPLE_SECURITY_USE_TARPIT' ) )
 			$this->use_tarpit = !empty( SIMPLE_SECURITY_USE_TARPIT );
@@ -111,6 +94,9 @@ class WPSimpleSecurity {
 			$this->login_token_name = SIMPLE_SECURITY_LOGIN_TOKEN_NAME;
 			$this->login_token_value = SIMPLE_SECURITY_LOGIN_TOKEN_VALUE;
 		}
+
+		if( defined( 'SIMPLE_SECURITY_ENFORCE_ADMIN_TOTP' ) )
+			$this->enforce_admin_totp = SIMPLE_SECURITY_ENFORCE_ADMIN_TOTP;
 
 		if( defined( 'SIMPLE_SECURITY_CLOUDFLARE_TURNSTILE_SITEKEY' ) && defined( 'SIMPLE_SECURITY_CLOUDFLARE_TURNSTILE_SECRETKEY' ) ) {
 			$this->cloudflare_turnstile_sitekey = SIMPLE_SECURITY_CLOUDFLARE_TURNSTILE_SITEKEY;
@@ -269,15 +255,18 @@ class WPSimpleSecurity {
 		}
 
 		//$_POST, $_GET, $_REQUEST Protections
-		add_action( 'plugins_loaded', array( $this, 'intercept_bad_requests' ), 1 ); // Delayed to plugins_loaded to allow user capability check
+		add_action( 'init', array( $this, 'intercept_xss_requests' ), 1 ); // Delayed to init to allow user capability check
 
 		//Login form protections
-		//TODO: Test for compatiblity with WooCommerce login form
 		//Force logout redirects to home page
 		add_filter( 'logout_url', array( $this, 'force_redirect_to_home' ) );
 		//Add nonce checking to wp-login.php forms
 		add_action( 'login_form', array( $this, 'add_login_form_nonce' ) );
 		add_action( 'register_form', array( $this, 'add_login_form_nonce' ) );
+		//Block API auth for admin users
+		add_filter( 'authenticate', array( $this, 'block_authenticate_for_admin_users' ), 50 );
+		add_action( 'send_auth_cookies', array( $this, 'block_auth_cookies_for_admin_users' ), PHP_INT_MAX, 6 );
+
 		if( 'POST' == $_SERVER['REQUEST_METHOD'] ) {
 			//Verify nonce and http referer
 			add_action( 'login_form_login', array( $this, 'verify_login_form_post' ) );
@@ -293,8 +282,11 @@ class WPSimpleSecurity {
 			add_filter( 'lostpassword_url', array( $this, 'add_login_token_to_url' ) );
 		}
 
-		//Cron
-		add_action( 'WPSimpleSecurity_gc_table_data', array( $this, 'gc_table_data' ) );
+		if( !empty( $this->enforce_admin_totp ) ) {
+			add_action( 'login_form', array( $this, 'add_login_form_totp_field' ) );	
+		}
+
+		add_action( 'show_user_profile', array( $this, 'add_user_profile_totp_qr_code' ) );
 	}
 	
 	static function &object() {
@@ -306,18 +298,11 @@ class WPSimpleSecurity {
 
 	public function activation() {
 		$this->install_tables();
-
-		if( !wp_next_scheduled( 'WPSimpleSecurity_gc_table_data' ) ) {
-			$start_of_the_hour = time();
-			$start_of_the_hour -= $start_of_the_hour % 3600;
-			wp_schedule_event( $start_of_the_hour, 'hourly', 'WPSimpleSecurity_gc_table_data' );
-		}
 	}
 
 	public function deactivation() {
 		//$this->delete_all_table_data();
 		wp_cache_flush();
-		wp_clear_scheduled_hook( 'WPSimpleSecurity_gc_table_data' );
 	}
 	
 	private function install_tables() {
@@ -332,26 +317,24 @@ class WPSimpleSecurity {
 		}
 
 		//Create access log table
-		$sql = "CREATE TABLE `".$this->admin_access_log_table."` (
-				`ip` VARBINARY(16) NOT NULL,
-				`accessed` DATETIME NOT NULL,
-				`user_agent` VARCHAR(255) NULL DEFAULT(NULL),
-				`url` VARCHAR(2048) NULL DEFAULT(NULL),
-				`post_data` BLOB NULL DEFAULT(NULL),
-				PRIMARY KEY (`ip`),
-				KEY ip_accessed (`ip`,`accessed`)
-			) $charset_collate;";
+		$sql = "CREATE TABLE IF NOT EXISTS `".$this->admin_access_log_table."` (
+						`ip` VARBINARY(16) NOT NULL,
+						`accessed` DATETIME NOT NULL,
+						`url` VARCHAR(2048) NULL DEFAULT(NULL),
+						`post_data` BLOB NULL DEFAULT(NULL),
+						PRIMARY KEY (`ip`)
+					) $charset_collate;";
 		dbDelta($sql);
 
 		//Create blocked table
-		$sql = "CREATE TABLE `".$this->blocked_table."` (
-				`ip` VARBINARY(16) NOT NULL,
-				`risk_level` ENUM('low','medium','high') NOT NULL,
-				`created` DATETIME NOT NULL,
-				`user_agent` VARCHAR(255) NULL DEFAULT(NULL),
-				`language` VARCHAR(128) NULL DEFAULT(NULL),
-				PRIMARY KEY (`ip`)
-			) $charset_collate;";
+		$sql = "CREATE TABLE IF NOT EXISTS `".$this->blocked_table."` (
+						`ip` VARBINARY(16) NOT NULL,
+						`risk_level` ENUM('low','medium','high') NOT NULL,
+						`created` DATETIME NOT NULL,
+						`user_agent` VARCHAR(255) NULL DEFAULT(NULL),
+						`language` VARCHAR(128) NULL DEFAULT(NULL),
+						PRIMARY KEY (`ip`)
+					) $charset_collate;";
 		dbDelta($sql);
 	}
 
@@ -364,47 +347,51 @@ class WPSimpleSecurity {
 	}
 	
 	public function intercept_bad_requests() {
-		// Stop here if IP is blocked
-		$this->intercept_blocked_request();
+		// Randomly clean table data on requests. ~%1 chance of this not happening in 25 requests.
+		// Deletes expired ip blocks and old ip access log data.
+		if ( !mt_rand(0, 5) )
+			$this->gc_table_data();
 
-		// Block external restricted requests
+		//Block external restricted requests
 		$this->intercept_restricted_requests();
 
-		// Block external restricted requests with bad values
-		$this->intercept_restricted_values();
-
-		// Prevent brute force attempts on wp-login.php
+		//Prevent brute force attempts on wp-login.php
 		$this->intercept_login_request();
 
-		// Check non-get requests for spam bot identifiers and block them
+		//Check non-get requests for spam bot identifiers and block them
 		$this->intercept_non_get_request();
 
-		// Stop here if IP has been blocked from this request
-		$this->intercept_blocked_request();
+		//Stop here if IP is blocked. This is intercepted last to allow bad requests to continue to hit the tarpit.
+		if( $this->use_ip_blocker )
+			$this->intercept_blocked_request();
 	}
 
-	public function deny_request() {
-		$this->log_request();
-		$this->block_ip_from_access_attempts();
+	public function deny_request( $redirect = false ) {
+		if( $this->use_ip_blocker )
+			$this->log_request();
 		if( $this->use_tarpit )
 			include 'includes/la_brea.php';
 
-		wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
+		if( false === $redirect )
+			wp_die( 'Access Denied', 'Access Denied', array( 'response' => 403 ) );
+		else
+			wp_redirect( home_url(), 307 );
+
+		die();
 	}
 
 	public function send_to_honeypot() {
-		if( empty( $this->honeypot_url ) )
-			return;
-
-		if( filter_var( $this->honeypot_url, FILTER_VALIDATE_URL ) ) {
-			wp_redirect( $this->honeypot_url, 307 ); // Use status 307 to encourage the bot to send the POST again for the honeypot
-			die();
-		} elseif( substr( $this->honeypot_url, 0, 1 ) === '/' ) {
-			$_SERVER['REQUEST_URI'] = $this->honeypot_url;
-			$_SERVER['SCRIPT_NAME'] = $this->honeypot_url;
-			$_SERVER['PHP_SELF'] = $this->honeypot_url;
-			include( $this->honeypot_url );
-			die();
+		if( !empty( $this->honeypot_url ) ) {
+			if( filter_var( $this->honeypot_url, FILTER_VALIDATE_URL ) ) {
+				wp_redirect( $this->honeypot_url, 307 ); // Use status 307 to encourage the bot to send the POST again for the honeypot
+				die();
+			} elseif( substr( $this->honeypot_url, 0, 1 ) === '/' ) {
+				$_SERVER['REQUEST_URI'] = $this->honeypot_url;
+				$_SERVER['SCRIPT_NAME'] = $this->honeypot_url;
+				$_SERVER['PHP_SELF'] = $this->honeypot_url;
+				include( $this->honeypot_url );
+				die();
+			}
 		}
 	}
 
@@ -527,8 +514,9 @@ class WPSimpleSecurity {
 			|| $this->comment_content_spam_check( $comment_author, $comment_author_email, $comment_author_url, $comment_content )
 			) {
 			
-			$this->log_request();
-			$this->block_ip_from_access_attempts();
+			if( $this->use_ip_blocker )
+				$this->log_request();
+
 			$this->send_to_honeypot();
 
 			// Fallback if not using honeypot.
@@ -548,7 +536,6 @@ class WPSimpleSecurity {
 
 		$regex_keys = explode("\n", $regex_keys );
 		foreach( $regex_keys as &$regex ) {
-			$regex = trim( $regex );
 			$regex = chr(1) . "\b$regex\b" . chr(1) . "ui";
 			if( @preg_match($regex, $comment_author) || @preg_match($regex, $comment_content) )
 				return true;
@@ -600,22 +587,13 @@ class WPSimpleSecurity {
 	/**
 	 * $_POST, $_GET, $_REQUEST Protections
 	 */
-	public function intercept_restricted_values() {
-		if( ( !$this->block_internal_ips && $this->request_ip_dot_notation === '127.0.0.1' ) //Don't block requests from localhost
-			|| current_user_can( 'unfiltered_html' ) )
+	public function intercept_xss_requests() {
+		if( ( defined( 'DOING_AJAX' ) && DOING_AJAX ) 
+			|| current_user_can( 'unfiltered_html' ) 
+			|| empty( preg_grep( '/<script/i', $_REQUEST ) ) )
 			return;
 
-		$num_restricted_values = count( $this->restricted_values );
-		for( $i = 0; $i < $num_restricted_values; $i++ ) {
-			foreach( $_REQUEST as &$value ) {
-				if( preg_match( "\2" . $this->restricted_values[$i] . "\2ui", $value ) ) {
-					add_filter( 'wp_die_xmlrpc_handler', function( $die_handler ) { return '_default_wp_die_handler'; } );
-	
-					$this->deny_request();
-				}
-			}
-			unset( $value );
-		}
+		$this->deny_request();
 	}
 
 	/**
@@ -630,14 +608,33 @@ class WPSimpleSecurity {
 			|| !$this->enforce_whitelist_admin_access && $is_admin_user )
 			return;
 		
-		$this->deny_request();
+		$this->deny_request( true );
+	}
+
+	public function block_authenticate_for_admin_users( $user ) {
+		if( '/wp-login.php' !== $this->script_name && $user instanceof WP_User && user_can( $user, 'edit_posts' ) ) {
+			$this->deny_request();
+			return new WP_Error( 'invalid_application_credentials', 'Error: API login for user disabled.' );
+		}
+
+		return $user;
+	}
+
+	public function block_auth_cookies_for_admin_users( $send_cookies, $expire, $expiration, $user_id, $scheme, $token ) {
+		$user = get_user_by( 'id', $user_id ); 
+		if( '/wp-login.php' !== $this->script_name && $user instanceof WP_User && user_can( $user, 'edit_posts' ) ) {
+			$send_cookies = false;
+			$this->deny_request();
+		}
+
+		return $send_cookies;
 	}
 
 	/**
 	 * Restricted request protection functions
 	 */
 	private function intercept_restricted_requests() {
-		if( !$this->block_internal_ips && $this->request_ip_dot_notation === '127.0.0.1' )
+		if( $this->request_ip_dot_notation === '127.0.0.1' )
 			return; //Don't block requests from localhost
 		
 		$num_restricted_requests = count( $this->restricted_requests );
@@ -657,18 +654,6 @@ class WPSimpleSecurity {
 				$this->deny_request();
 			}
 		}
-
-		foreach( $_GET as $name => $value ) {
-			// Block requests with BIGINTs in the query string as it is obvious cache poisoning or log evasion
-			// SHA1 hashes are 40 characters in length, so we are only blocking INTs larger than that
-			if( preg_match( '/[0-9]{40,}/u', $name ) 
-				|| preg_match( '/[0-9]{40,}/u', $value ) ) {
-				add_filter( 'wp_die_xmlrpc_handler', function( $die_handler ) { return '_default_wp_die_handler'; } );
-
-				$this->deny_request();
-			}
-		}
-		unset( $name, $value );
 	}
 
 	/**
@@ -678,9 +663,8 @@ class WPSimpleSecurity {
 		if( 'POST' == $_SERVER['REQUEST_METHOD'] || '/wp-login.php' !== $this->script_name )
 			return;
 		
-		if( $_REQUEST['action'] == 'logout' || $_REQUEST['action'] == 'rp' ) {
+		if( isset( $_REQUEST['action'] ) && ( $_REQUEST['action'] == 'logout' || $_REQUEST['action'] == 'rp' ) )
 			return;
-		}
 
 		if( $this->enforce_whitelist_admin_access && !$this->whitelisted )
 			$this->deny_request();
@@ -720,13 +704,75 @@ class WPSimpleSecurity {
 		$this->nonce_field( 'simple_security_wp_login', 'simple_security_wp_login' );
 	}
 
+	public function add_login_form_totp_field() {
+		?>
+		<p>
+			<label for="user_totp">Authentication code<br>
+			<input type="text" name="user_totp" id="user_totp" autocomplete="one-time-code" class="input" value="" size="20" tabindex="30"></label>
+		</p>
+		<?php
+	}
+
+	public function add_user_profile_totp_qr_code( $profile_user ) {
+		$label =  rawurlencode( 'WordPress Admin (' . $profile_user->user_login . ')' );
+		$issuer = rawurlencode( site_url() );
+		$secret_key = $this->create_totp_secret_key( $profile_user );
+
+		$qrcode_text = "otpauth://totp/$label?secret=$secret_key&issuer=$issuer&algorithm=SHA1&digits=6&period=30";
+		?>
+		<script>
+			document.addEventListener( 'DOMContentLoaded', function() {
+				// Draws the given QR Code, with the given module scale and border modules, onto the given HTML
+				// canvas element. The canvas's width and height is resized to (qr.size + border * 2) * scale.
+				// The drawn image is purely dark and light, and fully opaque.
+				// The scale must be a positive integer and the border must be a non-negative integer.
+				function drawCanvas(qr, scale, border, lightColor, darkColor, canvas) {
+					const width = (qr.size + border * 2) * scale;
+					canvas.width = width;
+					canvas.height = width;
+					let ctx = canvas.getContext("2d");
+					for (let y = -border; y < qr.size + border; y++) {
+						for (let x = -border; x < qr.size + border; x++) {
+							ctx.fillStyle = qr.getModule(x, y) ? darkColor : lightColor;
+							ctx.fillRect((x + border) * scale, (y + border) * scale, scale, scale);
+						}
+					}
+				}
+				let qrCanvas = document.createElement("canvas");
+				drawCanvas( qrcodegen.QrCode.encodeText( "<?php echo $qrcode_text; ?>", qrcodegen.QrCode.Ecc.MEDIUM ), 10, 4, "#FFFFFF", "#000000", qrCanvas );
+				document.getElementById( "auth-qr-code" ).appendChild( qrCanvas );
+			} );
+		</script>
+		<h3>Add Authenticator</h3>
+		<table class="form-table">
+			<tr>
+				<th>
+					<label for="auth-qr-code">Scan QR Code with your authenicator app for login</label>
+				</th>
+				<td id="auth-qr-code">
+					
+				</td>
+			</tr>
+		</table>
+		<?php
+	}
+
 	public function verify_login_form_post() {
 		if( $this->enforce_whitelist_admin_access && !$this->whitelisted )
 			$this->deny_request();
 
 		if( remove_query_arg( 'redirect_to', $_SERVER['HTTP_REFERER'] ) === wp_login_url() 
-			&& $this->verify_nonce( $_REQUEST['simple_security_wp_login'], 'simple_security_wp_login' ) )
-			return;
+			&& $this->verify_nonce( $_REQUEST['simple_security_wp_login'], 'simple_security_wp_login' ) ) {
+			
+			if( empty( $this->enforce_admin_totp ) )
+				return;
+
+			if ( !empty( $_POST['log'] ) && ( $user = get_user_by('login', sanitize_user( $_POST['log'] ) ) ) ) {
+				$secret_key = $this->create_totp_secret_key( $user );
+				if( $this->verify_totp( $secret_key, $_REQUEST['user_totp'] ) )
+					return;
+			}
+		}
 
 		$this->deny_request();
 	}
@@ -738,6 +784,9 @@ class WPSimpleSecurity {
 		$request_method = strtoupper( $_SERVER['REQUEST_METHOD'] );
 		if( 'GET' === $request_method || 'HEAD' === $request_method )
 			return;
+
+		// Include wp_validate_redirect and wp_redirect since they aren't available yet
+		require_once( ABSPATH . WPINC . '/pluggable.php' );
 
 		// Detect headless browsers
 		// Some techniques adapted from:
@@ -758,20 +807,23 @@ class WPSimpleSecurity {
 			// Headless browsers may not send a valid Accept-Language header
 			//|| false === $locale
 			) {
-
-			$this->log_request();
-			$this->block_ip();
-			$this->send_to_honeypot();
-	
-			// Fallback if not using honeypot.
-			wp_redirect( get_bloginfo( 'url' ), 303 );
-			die();
+			$this->handle_spam_bot_request();
 		}
 
 		// Block IPs with spam reps in http:BL
-		// Only check use_ip_blocker here to save the is_spam_ip() call
-		if( $this->use_ip_blocker && $this->is_spam_ip() )
+		if( $this->use_ip_blocker && $this->is_spam_ip() ) // Only 
 			$this->block_ip();
+	}
+
+	public function handle_spam_bot_request() {
+		if( $this->use_ip_blocker )
+			$this->block_ip();
+
+		$this->send_to_honeypot();
+
+		// Fallback if not using honeypot.
+		wp_redirect( get_bloginfo( 'url' ), 303 );
+		die();
 	}
 
 	/**
@@ -978,15 +1030,54 @@ class WPSimpleSecurity {
 	}
 
 	/**
+	 * TOTP functions
+	 */
+	private function verify_totp( $secret_key, $totp ) {
+		$nonce = (string) $nonce;
+		
+		// Current totp
+		if ( $this->create_totp( $secret_key ) == $totp )
+			return 1;
+		// Previous totp
+		if ( $this->create_totp( $secret_key, -30 ) == $totp )
+			return 2;
+		// Previous previous totp
+		if ( $this->create_totp( $secret_key, -60 ) == $totp )
+			return 3;
+		// Invalid totp
+		return false;
+	}
+
+	private function create_totp( $secret_key, $time = 0 ) {
+		require_once 'includes/php-totp/Base32.php';
+		require_once 'includes/php-totp/Totp.php';
+
+		$totp = new Totp( 'sha1', 0, 30 );
+
+		$time += ( new DateTime( 'now', new DateTimeZone( 'UTC' ) ) )->getTimestamp();
+
+		return $totp->GenerateToken( Base32::decode( $secret_key ), $time );
+	}
+
+	private function create_totp_secret_key( $wp_user ) {
+		require_once 'includes/php-totp/Base32.php';
+
+		$secret_key = 'simple_security_wp_login_totp|' . $wp_user->ID . '|' . $wp_user->user_login . '|' . $wp_user->user_registered ;
+		$secret_key = Base32::encode( hash_hmac( 'sha1', $secret_key, wp_salt( 'secure_auth' ), true ) );
+
+		return $secret_key;
+	}
+
+	/**
 	 * Bad IP protection functions
 	 */
-	public function intercept_blocked_request() {
-		if( !$this->use_ip_blocker )
-			return;
-
+	private function intercept_blocked_request() {
 		$blocked_ip = $this->is_blocked_ip();
 		if( empty( $blocked_ip ) )
 			return;
+
+		// Include wp_nonce functions and wp_redirect since they aren't available yet
+		require_once( ABSPATH . WPINC . '/pluggable.php' );
 
 		$nonce_action = 'simple_security_unblock_ip|' . $blocked_ip->ip . '|' . $blocked_ip->created;
 		$unblock_url = remove_query_arg( 'unblock_ip', $this->self_uri() );
@@ -1020,8 +1111,7 @@ class WPSimpleSecurity {
 			$child_selector = $good_link_num_obf . 'n-' . ( $good_link_num_obf - $good_link_num );
 			$message .= '<style>.unblock-link:nth-child(' . $child_selector . ') { display: block !important; }</style>';
 		}
-
-		add_filter( 'wp_die_xmlrpc_handler', function( $die_handler ) { return '_default_wp_die_handler'; } );
+		
 		wp_die( $message, 'IP Blocked', array( 'response' => 403 ) );
 	}
 
@@ -1029,27 +1119,16 @@ class WPSimpleSecurity {
 	 * IP logging functions
 	 */
 	private function log_request() {
-		if( !$this->use_ip_blocker )
-			return;
-
 		$now = current_time( 'mysql' );
 		
 		$post_data = '';
-		if( 'POST' === strtoupper( $_SERVER['REQUEST_METHOD'] ) )
+		if( 'POST' === strtoupper( $_SERVER['REQUEST_METHOD'] ) ) {
 			$post_data = @serialize( $_POST );
-		$user_agent = '';
-		if( !empty( $_SERVER['HTTP_USER_AGENT'] ) )
-			$user_agent = $_SERVER['HTTP_USER_AGENT'];
+		}
 
-		$query = $this->wpdb->prepare( "INSERT INTO {$this->admin_access_log_table} (ip, accessed, url, post_data, user_agent) VALUES (%s, %s, %s, %s, %s)", $this->request_ip, $now, $this->self_uri(), $post_data, $user_agent );
+		$query = $this->wpdb->prepare( "INSERT INTO {$this->admin_access_log_table} (ip, accessed, url, post_data) VALUES (%s, %s, %s, %s)", $this->request_ip, $now, $this->self_uri(), $post_data );
 		$this->wpdb->query( $query );
-	}
 
-	private function block_ip_from_access_attempts() {
-		if( !$this->use_ip_blocker )
-			return;
-
-		$now = current_time( 'mysql' );
 		$query = $this->wpdb->prepare( "SELECT COUNT(1) as num_access_attempts FROM {$this->admin_access_log_table} WHERE ip=%s AND {$this->bad_request_time_period_in_minutes} >= TIMESTAMPDIFF( MINUTE, accessed, %s )", $this->request_ip, $now );
 		$num_access_attempts = $this->wpdb->get_var( $query );
 		if( $num_access_attempts >= $this->num_bad_requests_in_time_period )
@@ -1057,9 +1136,6 @@ class WPSimpleSecurity {
 	}
 
 	private function block_ip( $risk_level = 'low' ) {
-		if( !$this->use_ip_blocker )
-			return;
-
 		$now = current_time( 'mysql' );
 		$user_agent = '';
 		if( !empty( $_SERVER['HTTP_USER_AGENT'] ) )
@@ -1072,13 +1148,8 @@ class WPSimpleSecurity {
 	}
 
 	private function unblock_ip() {
-		if( !$this->use_ip_blocker )
-			return;
-		
-		// Prevent spam ip blocks from being issued again without bad activity
-		wp_cache_set( $this->request_ip_dot_notation, '0', 'simple_security_is_spam_ip', DAY_IN_SECONDS );
-		// Prevent blocking again for 1 hour. Shared IPv4 used from mobile networks make this required.
-		wp_cache_set( $this->request_ip_dot_notation, '0', 'simple_security_is_blocked_ip', HOUR_IN_SECONDS );
+		wp_cache_set( $this->request_ip_dot_notation, '0', 'simple_security_is_spam_ip', DAY_IN_SECONDS ); // Prevent spam ip blocks from being issued again without bad activity
+		wp_cache_set( $this->request_ip_dot_notation, '0', 'simple_security_is_blocked_ip', HOUR_IN_SECONDS ); // Prevent blocking again for 1 hour
 		$query = $this->wpdb->prepare( "DELETE QUICK FROM {$this->blocked_table} WHERE ip=%s LIMIT 1", $this->request_ip );
 		$this->wpdb->query( $query );
 	}
@@ -1102,11 +1173,11 @@ class WPSimpleSecurity {
 	}
 
 	public function get_logged_ips() {
-		$logged_ips = $this->wpdb->get_results( "SELECT INET6_NTOA(ip) as ip, accessed, url, post_data, user_agent FROM {$this->admin_access_log_table} ORDER BY accessed DESC" );
+		$logged_ips = $this->wpdb->get_results( "SELECT INET6_NTOA(ip) as ip, accessed, url, post_data FROM {$this->admin_access_log_table} ORDER BY accessed DESC" );
 		return $logged_ips;
 	}
 
-	public function gc_table_data() {
+	private function gc_table_data() {
 		//Maintain logs for 7 days
 		//Use DAY units for better DB memcache support (redis)
 		$now = current_time('Y-m-d 23:59:59');
@@ -1150,6 +1221,9 @@ class WPSimpleSecurity {
 			</p>
 			<?php
 		}, 'discussion' );
+		if( defined( 'IS_PROFILE_PAGE' ) && IS_PROFILE_PAGE ) {
+			wp_enqueue_script( 'wp-simple-security-qrcodegen-js', plugins_url( '/js/qrcodegen-v1.8.0-es6.js', __FILE__ ) );
+		}
 	}
 
 	public function setup_admin_pages() {
@@ -1213,7 +1287,6 @@ class WPSimpleSecurity {
 						<th>Look Up On</th>
 						<th>URL</th>
 						<th>Blocked Access At</th>
-						<th>Browser Details</th>
 						<th>Post Data</th>
 					</tr>
 				</thead>
@@ -1229,19 +1302,6 @@ class WPSimpleSecurity {
 								<a href="https://www.projecthoneypot.org/ip_<?php echo urlencode( $logged_ip->ip ); ?>" target="_blank">Project Honey Pot</a></td>
 							<td><?php echo htmlentities( $logged_ip->url ); ?></td>
 							<td><?php echo $logged_ip->accessed; ?></td>
-							<td>
-								<?php
-								if( !empty( $logged_ip->user_agent ) ):
-									?>
-									<dialog>
-										<p>User Agent:<br /><code><?php echo $blocked_ip->user_agent; ?></code></p>
-										<button onclick="this.parentElement.close();">Close</button>
-									</dialog>
-									<a onclick="this.previousElementSibling.showModal();">View Browser Details</a>
-									<?php
-								endif;
-								?>
-							</td>
 							<td>
 								<?php 
 								$logged_ip->post_data = @unserialize( $logged_ip->post_data );
@@ -1286,3 +1346,4 @@ class WPSimpleSecurity {
 }
 
 $WPSimpleSecurity = WPSimpleSecurity::object();
+$WPSimpleSecurity->intercept_bad_requests();
